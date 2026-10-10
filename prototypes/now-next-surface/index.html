@@ -1,0 +1,580 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throwaway. Answers ticket #8 (issues/wayfinder-v1-spec/0008-now-next-surface.md):
+  "How should Now/Next and the Nudge look and feel?"
+  Three structurally different surfaces, switchable via ?variant=A|B|C (bottom bar or ← →):
+    A  Rich popover: menu-bar item shows the Committed Task; one big dropdown holds everything; Nudge is a notification banner.
+    B  Native menu: tiny menu-bar title, NSMenu-style list with submenus; Nudge takes over the menu-bar title; quick-add is a ⌥Space palette.
+    C  Floating HUD: a pill docked above the Dock shows Now → Next; Nudge and prompts grow out of the pill.
+  Left panel drives the scenario (foreground window, time). Right panel shows the full state after every action.
+  Logic is a rough stand-in for decisions on #5, #6, #9, #10 — not the real resolver.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Now/Next prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.35 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; background: #1d1f24; color: #222; height: 100vh; display: grid; grid-template-columns: 250px 1fr 300px; overflow: hidden; }
+  button { font: inherit; cursor: pointer; }
+  .dim { opacity: .55; }
+  .tiny { font-size: 11px; }
+
+  /* ---------- prototype tooling (not the design) ---------- */
+  .tool { background: #111317; color: #c9ccd3; padding: 12px; overflow-y: auto; font-size: 12px; }
+  .tool h4 { margin: 14px 0 6px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #7c8290; }
+  .tool h4:first-child { margin-top: 0; }
+  .tool button { display: block; width: 100%; text-align: left; background: #1e2128; color: #d7dae0; border: 1px solid #2b2f38; border-radius: 5px; padding: 5px 8px; margin: 3px 0; }
+  .tool button:hover { background: #262a33; }
+  .tool button.sel { border-color: #f0b429; color: #fff; }
+  .tool .row { display: flex; gap: 4px; }
+  .tool .row button { text-align: center; }
+  .tool pre { white-space: pre-wrap; margin: 0; font: 11px/1.4 ui-monospace, Menlo, monospace; }
+  .tool .ev { font: 11px/1.4 ui-monospace, Menlo, monospace; color: #9aa0ab; }
+  .badge-proto { display: inline-block; background: #f0b429; color: #111; font-weight: 700; font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-bottom: 8px; }
+
+  /* ---------- fake desktop ---------- */
+  .desk { position: relative; overflow: hidden; background: linear-gradient(160deg, #6d8fb3 0%, #a4b8cf 45%, #d9c7b8 100%); }
+  .menubar { position: absolute; inset: 0 0 auto 0; height: 26px; background: rgba(246,246,246,.82); backdrop-filter: blur(20px); display: flex; align-items: center; padding: 0 10px; gap: 16px; font-size: 13px; z-index: 20; }
+  .menubar .app { font-weight: 700; }
+  .menubar .right { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+  .mb-item { padding: 1px 7px; border-radius: 4px; cursor: default; display: flex; align-items: center; gap: 6px; white-space: nowrap; position: relative; }
+  .mb-item:hover, .mb-item.on { background: rgba(0,0,0,.12); }
+  .win { position: absolute; top: 60px; left: 50px; right: 50px; bottom: 110px; background: #fff; border-radius: 10px; box-shadow: 0 20px 50px rgba(0,0,0,.3); overflow: hidden; }
+  .win .tb { height: 30px; background: #ececec; border-bottom: 1px solid #d5d5d5; display: flex; align-items: center; padding: 0 10px; gap: 7px; font-size: 12px; color: #444; }
+  .win .tb i { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .win .body { padding: 20px; color: #bbb; font: 12px/1.9 ui-monospace, Menlo, monospace; }
+  .win.dark .body { background: #1e1e1e; height: 100%; color: #555; }
+  .dock { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); height: 52px; width: 420px; background: rgba(255,255,255,.35); border-radius: 16px; backdrop-filter: blur(20px); z-index: 5; }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+  .dot.hollow { background: transparent !important; border: 1.5px dashed currentColor; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 10px; font-size: 11px; background: #eef0f4; color: #333; }
+  .chip.guess { background: transparent; border: 1px dashed #999; font-style: italic; color: #555; }
+  .btn { border: 1px solid #c8cbd1; background: #fff; border-radius: 6px; padding: 3px 9px; font-size: 12px; color: #222; }
+  .btn:hover { background: #f2f3f5; }
+  .btn.pri { background: #2f6fed; border-color: #2f6fed; color: #fff; }
+  .btn.pri:hover { background: #255fd1; }
+  .btn.link { border: none; background: none; color: #2f6fed; padding: 3px 4px; }
+  .btns { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+
+  /* ---------- Variant A: rich popover ---------- */
+  .popA { position: absolute; top: 30px; right: 8px; width: 360px; max-width: calc(100% - 16px); max-height: calc(100% - 50px); overflow-y: auto; background: rgba(250,250,251,.97); border-radius: 12px; box-shadow: 0 14px 40px rgba(0,0,0,.28), 0 0 0 .5px rgba(0,0,0,.2); z-index: 30; }
+  .popA section { padding: 10px 14px; border-bottom: 1px solid #e6e7ea; }
+  .popA section:last-child { border-bottom: none; }
+  .popA h6 { margin: 0 0 5px; font-size: 10px; letter-spacing: .08em; color: #8a8f99; }
+  .popA .big { font-size: 15px; font-weight: 600; }
+  .popA .reason { color: #555; font-size: 12px; margin-top: 3px; }
+  .popA .prompt { background: #fff8e6; border-bottom: 1px solid #f1e2b5; }
+  .popA .line { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; align-items: center; }
+  .popA input[type=text] { width: 100%; border: 1px solid #ccd; border-radius: 6px; padding: 6px 8px; font: inherit; }
+  .bannerA { position: absolute; top: 34px; right: 10px; width: 330px; background: rgba(245,245,247,.97); border-radius: 12px; padding: 10px 12px; box-shadow: 0 10px 30px rgba(0,0,0,.25); z-index: 40; }
+  .bannerA .ttl { font-weight: 600; }
+  .pip { position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%; background: #e5484d; }
+
+  /* ---------- Variant B: native menu ---------- */
+  .menuB { position: absolute; top: 27px; right: 8px; width: 380px; max-width: calc(100% - 16px); max-height: calc(100% - 40px); overflow-y: auto; background: rgba(236,236,238,.97); backdrop-filter: blur(20px); border-radius: 7px; padding: 5px; box-shadow: 0 10px 30px rgba(0,0,0,.3), 0 0 0 .5px rgba(0,0,0,.25); z-index: 30; font-size: 13px; }
+  .menuB .mi { padding: 3px 10px; border-radius: 4px; display: flex; gap: 8px; align-items: center; cursor: default; white-space: nowrap; }
+  .menuB .mi:hover:not(.hdr) { background: #2f6fed; color: #fff; }
+  .menuB .mi:hover:not(.hdr) .dim, .menuB .mi:hover:not(.hdr) .k { color: #fff; opacity: .8; }
+  .menuB .mi .k { margin-left: auto; color: #888; font-size: 12px; padding-left: 20px; }
+  .menuB .hdr { white-space: normal; color: #777; font-size: 11px; font-weight: 600; padding-top: 5px; }
+  .menuB .sep { height: 1px; background: #cfcfd3; margin: 5px 8px; }
+  .menuB .sub { margin-left: 18px; border-left: 2px solid #cfd3da; }
+  .menuB .warn { background: #fff1cc; }
+  .mbB-nudge { background: #f0b429 !important; color: #111; font-weight: 600; animation: pulse 2s ease-in-out 3; }
+  @keyframes pulse { 50% { filter: brightness(1.15); transform: scale(1.03); } }
+  .palette { position: absolute; top: 22%; left: 50%; transform: translateX(-50%); width: 520px; background: rgba(250,250,252,.97); border-radius: 14px; box-shadow: 0 25px 60px rgba(0,0,0,.35); padding: 12px; z-index: 50; }
+  .palette input { width: 100%; font-size: 20px; border: none; outline: none; background: transparent; padding: 4px 6px; }
+  .palette .hint { padding: 6px 6px 0; color: #777; font-size: 12px; }
+
+  /* ---------- Variant C: floating HUD ---------- */
+  .hud { position: absolute; right: 16px; bottom: 74px; width: 340px; max-width: calc(100% - 32px); z-index: 30; display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+  .pill { background: rgba(28,30,36,.92); color: #f2f2f4; border-radius: 16px; padding: 9px 12px; box-shadow: 0 10px 30px rgba(0,0,0,.35); backdrop-filter: blur(16px); }
+  .pill .rowC { display: flex; align-items: center; gap: 8px; }
+  .pill .lbl { font-size: 9px; letter-spacing: .1em; color: #8d93a0; font-weight: 700; }
+  .pill .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pill .btn { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.18); color: #eee; }
+  .pill .btn:hover { background: rgba(255,255,255,.2); }
+  .pill .btn.pri { background: #2f6fed; border-color: #2f6fed; }
+  .pill .chip { background: rgba(255,255,255,.12); color: #ddd; }
+  .pill .chip.guess { border-color: #888; color: #ccc; background: transparent; }
+  .pill.drift { background: rgba(70,52,10,.95); box-shadow: 0 0 0 2px #f0b429, 0 10px 30px rgba(0,0,0,.35); }
+  .pill input[type=text] { width: 100%; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 6px; padding: 5px 8px; font: inherit; }
+  .pill hr { border: none; border-top: 1px solid rgba(255,255,255,.1); margin: 8px 0; }
+  .toastC { background: rgba(250,250,252,.96); border-radius: 12px; padding: 8px 11px; box-shadow: 0 6px 20px rgba(0,0,0,.25); font-size: 12px; }
+
+  .choices { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+
+  /* ---------- switcher ---------- */
+  .switcher { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); background: #111; color: #fff; border-radius: 999px; padding: 5px 6px; display: flex; align-items: center; gap: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.5); z-index: 100; border: 1px solid #f0b429; }
+  .switcher button { background: #2a2a2a; border: none; color: #fff; width: 28px; height: 28px; border-radius: 50%; font-size: 14px; }
+  .switcher span { padding: 0 8px; font-weight: 600; font-size: 12px; min-width: 190px; text-align: center; }
+</style>
+</head>
+<body>
+<aside class="tool" id="sim"></aside>
+<main class="desk" id="desk"></main>
+<aside class="tool" id="state"></aside>
+<div class="switcher"><button data-sw="-1">←</button><span id="swl"></span><button data-sw="1">→</button></div>
+
+<script>
+// ===================== world =====================
+const PROJECTS = {
+  assist: { name: 'Personal assistant', color: '#5b8def', matcher: '~/code/todo-agent' },
+  dotnet: { name: 'Learning .NET', color: '#a46bd6', matcher: 'learn.microsoft.com/*/training/ · ~/code/dotnet-exercises' },
+  budget: { name: 'Household budget', color: '#3aa776', matcher: 'Sheet: Budget 2026' },
+};
+const WINDOWS = [
+  { id: 'vs-assist', app: 'Code', title: 'NowResolver.swift — todo-agent [main]', key: '~/code/todo-agent', match: 'assist', dark: true },
+  { id: 'vs-dotnet', app: 'Code', title: 'Program.cs — dotnet-exercises [lesson-4]', key: '~/code/dotnet-exercises', match: 'dotnet', dark: true },
+  { id: 'learn', app: 'Chrome', title: 'Classes and objects — Training | Microsoft Learn', key: 'learn.microsoft.com/en-gb/training/', match: 'dotnet' },
+  { id: 'apidocs', app: 'Chrome', title: 'List<T> Class (System.Collections.Generic) | Microsoft Learn', key: 'learn.microsoft.com/en-gb/dotnet/api/', neutral: true },
+  { id: 'sheet', app: 'Chrome', title: 'Budget 2026 — Google Sheets', key: 'Sheet: Budget 2026', match: 'budget' },
+  { id: 'slack', app: 'Slack', title: '#general — Slack', key: 'Slack', neutral: true },
+  { id: 'youtube', app: 'Chrome', title: 'C# async/await explained — YouTube', key: 'youtube.com/watch?v=Xa1', guess: 'dotnet' },
+  { id: 'figma', app: 'Figma', title: 'Portfolio site — Home', key: 'Figma: Portfolio site', guess: null },
+  { id: 'reddit', app: 'Chrome', title: 'r/macapps — Reddit', key: 'reddit.com/r/macapps', guess: null },
+  { id: '1pw', app: '1Password', title: '(Excluded — not read)', key: '1Password', excluded: true },
+];
+const CAL = [{ start: 11 * 60, end: 11 * 60 + 15, title: 'Standup' }, { start: 12 * 60 + 30, end: 13 * 60 + 30, title: 'Lunch' }];
+const EFFORT_MIN = { S: 15, M: 60, L: 120 };
+
+let tid = 10;
+const S = {
+  clock: 9 * 60 + 40, win: 'vs-assist', onWin: 22, lastProject: 'assist', neutralFor: 0,
+  committed: 't1', committedFor: 22, resumeTask: null,
+  tasks: [
+    { id: 't1', title: 'Wire Now resolver to window titles', project: 'assist', effort: 'M', kind: 'deep', source: 'code', status: 'committed' },
+    { id: 't2', title: 'Finish lesson 4: classes & objects', project: 'dotnet', effort: 'M', kind: 'deep', source: 'hand', status: 'open' },
+    { id: 't3', title: 'Reply to Sam re: invoice', project: null, effort: 'S', kind: 'shallow', source: 'email', status: 'open', deadline: 'today' },
+    { id: 't4', title: 'Update March totals', project: 'budget', effort: 'S', kind: 'shallow', source: 'sheets', status: 'open' },
+    { id: 't5', title: 'Refactor triage prompt', project: 'assist', effort: 'L', kind: 'deep', source: 'hand', status: 'open' },
+  ],
+  suggestions: [
+    { id: 's1', title: 'Confirm inspection date with landlord', source: 'email', deadline: 'Fri (guessed)' },
+    { id: 's2', title: 'Buy HDMI adapter', source: 'notes' },
+  ],
+  digest: ['Bank: statement ready for September', 'GitHub: dependabot merged 2 PRs', 'Course: lesson 5 unlocked'],
+  userMatchers: {}, userNeutral: [], override: null,
+  driftMin: 0, nudgeDismissed: false, nudgeQuietUntil: 0, driftThreshold: 5,
+  noProjectMin: 0, newTaskDismissed: false,
+  proposals: [], pendingAlways: null, skipCounts: {}, demotedUntil: {}, skipAsk: null,
+  // ui
+  open: false, panel: null, draft: '', startNow: false, palette: false, toast: null, events: [],
+};
+
+// ===================== helpers =====================
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const hhmm = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const short = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
+const win = () => WINDOWS.find(w => w.id === S.win);
+const task = id => S.tasks.find(t => t.id === id);
+const committedTask = () => S.committed ? task(S.committed) : null;
+const pname = p => p ? PROJECTS[p].name : 'No Project';
+const pdot = (p, guess) => `<span class="dot ${guess ? 'hollow' : ''}" style="background:${p ? PROJECTS[p].color : '#999'};color:${p ? PROJECTS[p].color : '#999'}"></span>`;
+const log = msg => { S.events.unshift(`${hhmm(S.clock)} ${msg}`); S.events.length = Math.min(S.events.length, 14); };
+const isNeutral = w => w.excluded || w.neutral || S.userNeutral.includes(w.key);
+
+// ===================== Now resolution (rough stand-in for #10) =====================
+function resolveNow() {
+  const w = win();
+  const hold = (why) => (S.lastProject && S.neutralFor < 15)
+    ? { project: S.lastProject, kind: 'neutral', evidence: `${why} — holding ${pname(S.lastProject)} (${15 - S.neutralFor}m left)` }
+    : { project: null, kind: 'none', evidence: `${why} — hold timed out` };
+  if (S.override && S.override.win === w.id) {
+    const v = S.override.value;
+    if (v === 'neutral') return hold('You marked this Neutral');
+    if (v === 'none') return { project: null, kind: 'none', evidence: 'You said: no Project' };
+    return { project: v, kind: 'override', evidence: 'You corrected this' };
+  }
+  if (w.excluded) return { ...hold('Excluded app, nothing read'), excluded: true };
+  if (S.userMatchers[w.key]) return { project: S.userMatchers[w.key], kind: 'match', evidence: `Your Matcher: ${w.key}` };
+  if (isNeutral(w)) return hold(`${w.app} is Neutral`);
+  if (w.match) return { project: w.match, kind: 'match', evidence: `Matched by ${w.key}` };
+  if (S.onWin >= 2) return w.guess
+    ? { project: w.guess, kind: 'guess', evidence: 'Haiku guess from one screenshot (cached for this window)' }
+    : { project: null, kind: 'none', evidence: 'Haiku: matches no Project' };
+  return { project: null, kind: 'none', evidence: `No Matcher fits; screenshot guess in ${2 - S.onWin}m` };
+}
+
+function settle(now) {
+  if (now.kind === 'neutral' || (now.kind === 'none' && isNeutral(win()))) { /* holding */ }
+  else if (now.kind === 'match' || now.kind === 'override') S.lastProject = now.project;
+}
+
+function tick(mins) {
+  for (let i = 0; i < mins; i++) {
+    S.clock++; S.onWin++; S.committedFor++;
+    const now = resolveNow();
+    if (now.kind === 'neutral' || isNeutral(win())) S.neutralFor++; else S.neutralFor = 0;
+    settle(now);
+    const c = committedTask();
+    if (c && now.project !== c.project && !(now.kind === 'neutral' && now.project === c.project)) S.driftMin++;
+    else { if (S.driftMin) S.nudgeDismissed = false; S.driftMin = 0; }
+    if (!now.project) S.noProjectMin++; else { S.noProjectMin = 0; S.newTaskDismissed = false; }
+    for (const t of S.tasks) if (t.status === 'snoozed' && t.wake && t.wake <= S.clock) { t.status = 'open'; log(`snooze ended: ${t.title}`); }
+  }
+  log(`+${mins}m`);
+}
+
+// ===================== Next (rough stand-in for #5) =====================
+function freeUntil() {
+  const ev = CAL.find(e => e.end > S.clock);
+  if (!ev) return { mins: 999, label: 'end of day' };
+  if (ev.start <= S.clock) return { mins: 0, label: `${ev.title} (now)` };
+  return { mins: ev.start - S.clock, label: `${ev.title} ${hhmm(ev.start)}`, at: hhmm(ev.start) };
+}
+function nextPick() {
+  if (S.resumeTask && task(S.resumeTask)?.status === 'open') return { task: task(S.resumeTask), reason: 'Back to what you were doing before the interruption' };
+  const now = resolveNow(), c = committedTask();
+  const cands = S.tasks.filter(t => t.status === 'open' && !(S.demotedUntil[t.id] > S.clock));
+  if (!cands.length) return { task: null, reason: S.suggestions.length ? `Review Suggestions (${S.suggestions.length})` : 'Plan tomorrow' };
+  const gap = freeUntil(), morning = S.clock < 12 * 60;
+  const score = t => (t.deadline === 'today' ? 100 : 0) + ((t.project && (t.project === now.project || t.project === c?.project)) ? 30 : 0)
+    + ((t.kind === 'deep') === morning ? 15 : 0) + (EFFORT_MIN[t.effort] <= gap.mins ? 50 : 0);
+  const best = [...cands].sort((a, b) => score(b) - score(a))[0];
+  const bits = [];
+  if (best.deadline === 'today') bits.push('due today');
+  if (best.project && best.project === (c?.project || now.project)) bits.push(`continues ${pname(best.project)}`);
+  if (EFFORT_MIN[best.effort] <= gap.mins) bits.push(`~${EFFORT_MIN[best.effort]}m, fits before ${gap.label}`);
+  else bits.push(`won't fit before ${gap.at || gap.label}`);
+  if (!best.deadline && (best.kind === 'deep') === morning) bits.push(morning ? 'deep work while it\'s morning' : 'shallow work for the afternoon');
+  const r = bits.join('; ');
+  return { task: best, reason: r.charAt(0).toUpperCase() + r.slice(1), wontFit: EFFORT_MIN[best.effort] > gap.mins };
+}
+
+// ===================== prompts (shared data, each variant styles them) =====================
+function nudge() {
+  const c = committedTask();
+  if (!c || S.driftMin < S.driftThreshold || S.nudgeDismissed || S.clock < S.nudgeQuietUntil) return null;
+  const now = resolveNow(), w = win();
+  return { c, now, w, text: `${S.driftMin}m in ${w.app}${now.project ? ` (${pname(now.project)})` : ''} — you committed to “${c.title}”.` };
+}
+function prompts() {
+  const out = [], w = win(), now = resolveNow();
+  if (S.pendingAlways) out.push({ kind: 'always', text: S.pendingAlways.value === 'neutral' ? `Always treat ${S.pendingAlways.key} as Neutral?` : `Always match ${S.pendingAlways.key} to ${pname(S.pendingAlways.value)}?`,
+    actions: [['alwaysYes', 'Always', true], ['alwaysNo', 'Just this once']] });
+  for (const p of S.proposals) out.push({ kind: 'proposal', text: `New Project: ${p.name}?`, sub: `Seen on 2 days: ${p.key}`, actions: [['propAdd', 'Add', true, p.name], ['propDismiss', 'Dismiss', false, p.name]] });
+  if (now.kind === 'guess') out.push({ kind: 'guess', text: `Is this ${pname(now.project)}?`, sub: short(w.title, 48), actions: [['guessYes', 'Yes', true], ['notThis', 'No, it\'s…']] });
+  if (S.noProjectMin >= 10 && !S.newTaskDismissed && !w.excluded) out.push({ kind: 'newtask', text: `New task: “${short(w.title.split(' — ')[0], 40)}”?`, sub: `${S.noProjectMin}m on unplanned work`, actions: [['newTaskAdd', 'Add', true], ['newTaskQuick', 'It\'s a quick one']] });
+  if (S.skipAsk) out.push({ kind: 'skip3', text: `Skipped “${short(task(S.skipAsk).title, 30)}” 3 times.`, actions: [['snooze', 'Snooze till tomorrow', false, S.skipAsk + '|tomorrow'], ['drop', 'Drop it', false, S.skipAsk], ['skipAskNo', 'Keep it']] });
+  return out;
+}
+
+// ===================== operations =====================
+const OPS = {
+  toggle() { S.open = !S.open; S.panel = null; },
+  close() { S.open = false; S.panel = null; S.palette = false; },
+  panel(arg) { S.panel = S.panel === arg ? null : arg; },
+  accept(id) {
+    const c = committedTask(); if (c && c.status === 'committed') c.status = 'open';
+    const t = task(id); t.status = 'committed'; S.committed = id; S.committedFor = 0; S.driftMin = 0; S.nudgeDismissed = false;
+    if (S.resumeTask === id) S.resumeTask = null;
+    log(`commit: ${t.title}`); S.panel = null;
+  },
+  skip(id) {
+    S.skipCounts[id] = (S.skipCounts[id] || 0) + 1; S.demotedUntil[id] = S.clock + 120;
+    if (S.resumeTask === id) S.resumeTask = null;
+    log(`skip (${S.skipCounts[id]}): ${task(id).title}`);
+    if (S.skipCounts[id] >= 3) S.skipAsk = id;
+    S.panel = null;
+  },
+  snooze(arg) {
+    const [id, when] = arg.split('|'); const t = task(id);
+    t.status = 'snoozed'; t.wake = when === '1h' ? S.clock + 60 : when === 'tomorrow' ? 24 * 60 + 9 * 60 : null;
+    t.note = when === 'waiting' ? 'waiting on someone' : undefined;
+    if (S.committed === id) S.committed = null;
+    if (S.skipAsk === id) S.skipAsk = null;
+    log(`snooze ${when}: ${t.title}`); S.panel = null;
+  },
+  drop(id) { task(id).status = 'dropped'; if (S.skipAsk === id) S.skipAsk = null; log(`dropped: ${task(id).title}`); },
+  skipAskNo() { S.skipCounts[S.skipAsk] = 0; S.skipAsk = null; },
+  done() { const c = committedTask(); if (!c) return; c.status = 'done'; S.committed = null; log(`done: ${c.title}`); },
+  notThis() { S.panel = 'notthis'; S.open = true; },
+  correct(value) {
+    const w = win();
+    S.override = { win: w.id, value };
+    if (value !== 'none') S.pendingAlways = { key: w.key, value };
+    log(`Not this → ${value === 'neutral' ? 'Neutral' : value === 'none' ? 'None' : pname(value)} (${w.key})`);
+    S.panel = null; S.driftMin = 0;
+  },
+  guessYes() { OPS.correct(resolveNow().project); },
+  alwaysYes() {
+    const { key, value } = S.pendingAlways;
+    if (value === 'neutral') S.userNeutral.push(key); else S.userMatchers[key] = value;
+    log(`Matcher added: ${key} → ${value === 'neutral' ? 'Neutral' : pname(value)} (Auto, you asked)`);
+    S.pendingAlways = null;
+  },
+  alwaysNo() { S.pendingAlways = null; },
+  markNeutral() { const w = win(); S.userNeutral.push(w.key); S.override = null; log(`marked Neutral: ${w.key}`); S.driftMin = 0; },
+  propAdd(name) {
+    const p = S.proposals.find(x => x.name === name); const id = name.toLowerCase().replace(/\W+/g, '');
+    PROJECTS[id] = { name, color: '#e07b39', matcher: p.key }; S.userMatchers[p.key] = id;
+    S.proposals = S.proposals.filter(x => x !== p); log(`Project added: ${name}`);
+  },
+  propDismiss(name) { S.proposals = S.proposals.filter(x => x.name !== name); log(`proposal dismissed: ${name}`); },
+  newTaskAdd() {
+    const w = win(), prev = S.committed;
+    const t = { id: 't' + (++tid), title: w.title.split(' — ')[0], project: null, effort: 'S', kind: 'shallow', source: 'hand', status: 'open' };
+    S.tasks.push(t); if (prev) S.resumeTask = prev; OPS.accept(t.id); S.newTaskDismissed = true; log(`ad-hoc task added + committed: ${t.title}`);
+  },
+  newTaskQuick() { S.newTaskDismissed = true; log('ad-hoc: "quick one", no task'); },
+  nudgeBack() { S.nudgeDismissed = true; log(`nudge → back to ${committedTask().title} (would open ${PROJECTS[committedTask().project]?.matcher || 'it'})`); },
+  nudgeSwitch() {
+    const now = resolveNow(); const t = S.tasks.find(t => t.status === 'open' && t.project && t.project === now.project);
+    if (t) OPS.accept(t.id); else { S.nudgeDismissed = true; S.noProjectMin = Math.max(S.noProjectMin, 10); S.newTaskDismissed = false; }
+  },
+  nudgeQuiet() { S.nudgeQuietUntil = S.clock + 30; S.nudgeDismissed = true; log('nudges quiet for 30m'); },
+  nudgeRelated() { OPS.correct(committedTask().project); },
+  sugAccept(id) { const s = S.suggestions.find(x => x.id === id); S.tasks.push({ id: 't' + (++tid), title: s.title, project: null, effort: 'S', kind: 'shallow', source: s.source, status: 'open', deadline: s.deadline ? 'fri' : undefined }); S.suggestions = S.suggestions.filter(x => x !== s); log(`Suggestion accepted: ${s.title}`); },
+  sugDismiss(id) { const s = S.suggestions.find(x => x.id === id); S.suggestions = S.suggestions.filter(x => x !== s); log(`Suggestion dismissed: ${s.title}`); },
+  digestPromote(i) { const line = S.digest[+i]; S.digest.splice(+i, 1); S.suggestions.push({ id: 's' + (++tid), title: line, source: 'email' }); log(`Digest → Suggestion: ${line}`); },
+  quickAdd() {
+    const title = S.draft.trim(); if (!title) return;
+    const now = resolveNow();
+    const t = { id: 't' + (++tid), title, project: now.kind === 'guess' ? null : now.project, effort: 'M', kind: 'shallow', source: 'hand', status: 'open' };
+    S.tasks.push(t); S.draft = ''; S.palette = false;
+    log(`added by hand: ${title} → ${pname(t.project)}`);
+    if (S.startNow) { if (S.committed) S.resumeTask = S.committed; OPS.accept(t.id); }
+    S.toast = { text: `Added “${short(title, 30)}” to ${pname(t.project)}`, id: t.id, at: S.clock };
+  },
+  undoAdd(id) { S.tasks = S.tasks.filter(t => t.id !== id); if (S.committed === id) { S.committed = S.resumeTask; if (S.committed) task(S.committed).status = 'committed'; S.resumeTask = null; } S.toast = null; log('undo add'); },
+  startToast(id) { if (S.committed) S.resumeTask = S.committed; OPS.accept(id); S.toast = null; },
+  palette() { S.palette = !S.palette; S.open = false; },
+  // sim
+  sw(id) { if (S.win !== id) { S.win = id; S.onWin = 0; if (S.override && S.override.win !== id) S.override = null; settle(resolveNow()); log(`foreground → ${win().app}: ${short(win().title, 30)}`); } },
+  tick(m) { tick(+m); },
+  propose() { if (!S.proposals.find(p => p.name === 'Portfolio site')) S.proposals.push({ name: 'Portfolio site', key: 'Figma: Portfolio site' }); log('assistant proposes Project: Portfolio site'); },
+  thr(d) { S.driftThreshold = Math.max(1, S.driftThreshold + +d); },
+  reset() { location.reload(); },
+};
+
+// ===================== shared fragments =====================
+function nowChip(now) {
+  if (now.kind === 'guess') return `<span class="chip guess">${pdot(now.project, true)} ${esc(pname(now.project))}?</span>`;
+  if (now.kind === 'neutral') return `<span class="chip">${pdot(now.project)} ${esc(pname(now.project))} <span class="dim">· held</span></span>`;
+  if (now.excluded && !now.project) return `<span class="chip">Excluded</span>`;
+  return `<span class="chip">${pdot(now.project)} ${esc(pname(now.project))}</span>`;
+}
+function notThisChoices(cls = 'btn') {
+  const w = win();
+  return `<div class="choices">
+    ${Object.entries(PROJECTS).map(([id, p]) => `<button class="${cls}" data-a="correct" data-arg="${id}">${pdot(id)} ${esc(p.name)}</button>`).join('')}
+    <button class="${cls}" data-a="correct" data-arg="neutral">Neutral <span class="dim">— ${esc(w.app)} is used for everything</span></button>
+    <button class="${cls}" data-a="correct" data-arg="none">None <span class="dim">— not work I track</span></button></div>`;
+}
+function promptActions(p, cls = 'btn') {
+  return `<div class="btns">${p.actions.map(([a, label, pri, arg]) => `<button class="${cls} ${pri ? 'pri' : ''}" data-a="${a}" ${arg !== undefined ? `data-arg="${esc(arg)}"` : ''}>${esc(label)}</button>`).join('')}</div>`;
+}
+function toastHTML(cls = 'btn') {
+  if (!S.toast) return '';
+  return `<div>${esc(S.toast.text)}</div><div class="btns">${S.committed !== S.toast.id ? `<button class="${cls} pri" data-a="startToast" data-arg="${S.toast.id}">Start now</button>` : ''}<button class="${cls}" data-a="undoAdd" data-arg="${S.toast.id}">Undo</button><button class="${cls} link" data-a="closeToast">OK</button></div>`;
+}
+OPS.closeToast = () => { S.toast = null; };
+
+// ===================== Variant A: rich popover =====================
+function VariantA() {
+  const now = resolveNow(), c = committedTask(), nx = nextPick(), nd = nudge(), pr = prompts(), w = win();
+  const label = c ? short(c.title, 30) : (now.project ? pname(now.project) : 'No Project');
+  const bar = `<div class="mb-item ${S.open ? 'on' : ''}" data-a="toggle">${pdot(now.project, now.kind === 'guess')} ${esc(label)} ${c ? `<span class="dim">${S.committedFor}m</span>` : ''}${pr.length && !S.open ? '<span class="pip"></span>' : ''}</div>`;
+  let pop = '';
+  if (S.open) {
+    pop = `<div class="popA">
+      ${nd ? `<section class="prompt"><b>Drifting?</b> ${esc(nd.text)}<div class="btns"><button class="btn pri" data-a="nudgeBack">Back to it</button><button class="btn" data-a="nudgeSwitch">Switch task</button><button class="btn" data-a="nudgeRelated">It's related</button><button class="btn link" data-a="nudgeQuiet">Quiet 30m</button></div></section>` : ''}
+      ${pr.map(p => `<section class="prompt"><b>${esc(p.text)}</b>${p.sub ? `<div class="tiny dim">${esc(p.sub)}</div>` : ''}${promptActions(p)}</section>`).join('')}
+      <section><h6>NOW</h6>
+        <div class="big">${c ? esc(c.title) : '<span class="dim">Nothing committed</span>'}</div>
+        <div class="line"><span>${nowChip(now)} <span class="tiny dim">${esc(short(w.app + ' · ' + w.title, 34))}</span></span></div>
+        <div class="tiny dim">${esc(now.evidence)}${c ? ` · committed ${S.committedFor}m` : ''}</div>
+        ${S.panel === 'notthis' ? notThisChoices() : `<div class="btns">${c ? '<button class="btn" data-a="done">Done</button>' : ''}<button class="btn" data-a="notThis">Not this →</button>${!isNeutral(w) ? `<button class="btn link" data-a="markNeutral">Mark ${esc(w.app === 'Chrome' ? 'site' : w.app)} as Neutral</button>` : ''}</div>`}
+      </section>
+      <section><h6>NEXT</h6>
+        ${nx.task ? `<div class="big">${esc(nx.task.title)}</div><div class="reason">${esc(nx.reason)}</div>
+        <div class="btns"><button class="btn pri" data-a="accept" data-arg="${nx.task.id}">Start</button><button class="btn" data-a="skip" data-arg="${nx.task.id}">Skip</button><button class="btn" data-a="panel" data-arg="snz">Snooze ▾</button></div>
+        ${S.panel === 'snz' ? `<div class="btns"><button class="btn" data-a="snooze" data-arg="${nx.task.id}|1h">1 hour</button><button class="btn" data-a="snooze" data-arg="${nx.task.id}|tomorrow">Tomorrow</button><button class="btn" data-a="snooze" data-arg="${nx.task.id}|waiting">Waiting on someone</button></div>` : ''}`
+        : `<div class="big">${esc(nx.reason)}</div>`}
+      </section>
+      <section><h6>SUGGESTIONS (${S.suggestions.length})</h6>
+        ${S.suggestions.map(s => `<div class="line"><span>${esc(s.title)} <span class="tiny dim">${s.source}${s.deadline ? ' · ' + s.deadline : ''}</span></span><span style="white-space:nowrap"><button class="btn" data-a="sugAccept" data-arg="${s.id}">✓</button> <button class="btn" data-a="sugDismiss" data-arg="${s.id}">✕</button></span></div>`).join('') || '<span class="dim">None</span>'}
+      </section>
+      <section><h6>WORTH KNOWING</h6>
+        ${S.digest.map((d, i) => `<div class="line"><span class="tiny">${esc(d)}</span><button class="btn link tiny" data-a="digestPromote" data-arg="${i}">→ Suggestion</button></div>`).join('') || '<span class="dim">Nothing new</span>'}
+      </section>
+      <section>
+        <input type="text" data-in="draft" placeholder="Add a task… (Enter)" value="${esc(S.draft)}">
+        <label class="tiny dim"><input type="checkbox" data-in="startNow" ${S.startNow ? 'checked' : ''}> start it now</label>
+        ${S.toast ? `<div style="margin-top:6px">${toastHTML()}</div>` : ''}
+      </section>
+    </div>`;
+  }
+  const banner = nd && !S.open ? `<div class="bannerA"><div class="ttl">Drifting?</div><div>${esc(nd.text)}</div>
+    <div class="btns"><button class="btn pri" data-a="nudgeBack">Back to it</button><button class="btn" data-a="nudgeSwitch">Switch task</button><button class="btn" data-a="nudgeRelated">It's related</button><button class="btn link" data-a="nudgeQuiet">Quiet 30m</button></div></div>` : '';
+  return { bar, overlay: pop + banner };
+}
+
+// ===================== Variant B: native menu =====================
+function VariantB() {
+  const now = resolveNow(), c = committedTask(), nx = nextPick(), nd = nudge(), pr = prompts(), w = win();
+  const short2 = now.project ? PROJECTS[now.project].name.split(' ').slice(-1)[0] : '—';
+  const bar = nd
+    ? `<div class="mb-item mbB-nudge ${S.open ? 'on' : ''}" data-a="toggle">↩ Back to: ${esc(short(c.title, 22))}?</div>`
+    : `<div class="mb-item ${S.open ? 'on' : ''}" data-a="toggle">${pdot(now.project, now.kind === 'guess')} ${esc(short2)}${now.kind === 'guess' ? '?' : ''}${pr.length ? ` <b style="color:#e5484d">•</b>` : ''}</div>`;
+  let menu = '';
+  if (S.open) {
+    const mi = (a, label, k = '', arg) => `<div class="mi" data-a="${a}" ${arg !== undefined ? `data-arg="${esc(arg)}"` : ''}>${label}<span class="k">${k}</span></div>`;
+    menu = `<div class="menuB">
+      ${nd ? `<div class="mi hdr warn">${esc(nd.text)}</div>${mi('nudgeBack', '↩ Back to it')}${mi('nudgeSwitch', 'Switch task')}${mi('nudgeRelated', 'This is related')}${mi('nudgeQuiet', 'Quiet for 30 min')}<div class="sep"></div>` : ''}
+      ${pr.map(p => `<div class="mi hdr warn">${esc(p.text)}${p.sub ? ` <span class="dim">${esc(p.sub)}</span>` : ''}</div>${p.actions.map(([a, l, , arg]) => mi(a, '&nbsp;&nbsp;' + esc(l), '', arg)).join('')}`).join('')}${pr.length ? '<div class="sep"></div>' : ''}
+      <div class="mi hdr">NOW · ${S.committedFor}m</div>
+      <div class="mi" style="font-weight:600">${c ? esc(c.title) : 'Nothing committed'}</div>
+      <div class="mi hdr" style="font-weight:400">${pdot(now.project, now.kind === 'guess')} ${esc(pname(now.project))}${now.kind === 'guess' ? '? (guess)' : now.kind === 'neutral' ? ' (held — ' + esc(w.app) + ' is Neutral)' : ''}</div>
+      ${c ? mi('done', 'Mark done', '⌘D') : ''}
+      ${mi('panel', 'Not this', '▸', 'notthis')}
+      ${S.panel === 'notthis' ? `<div class="sub">${Object.entries(PROJECTS).map(([id, p]) => mi('correct', pdot(id) + ' ' + esc(p.name), '', id)).join('')}${mi('correct', 'Neutral', '', 'neutral')}${mi('correct', 'None', '', 'none')}</div>` : ''}
+      ${!isNeutral(w) ? mi('markNeutral', `Treat ${esc(w.app === 'Chrome' ? w.key.split('/')[0] : w.app)} as Neutral`) : ''}
+      <div class="sep"></div>
+      <div class="mi hdr">NEXT</div>
+      ${nx.task ? `${mi('panel', `<b>${esc(nx.task.title)}</b>`, '▸', 'next')}<div class="mi hdr" style="font-weight:400">${esc(nx.reason)}</div>
+        ${S.panel === 'next' ? `<div class="sub">${mi('accept', 'Start', '↩', nx.task.id)}${mi('skip', 'Skip', '⌘→', nx.task.id)}${mi('snooze', 'Snooze 1 hour', '', nx.task.id + '|1h')}${mi('snooze', 'Snooze till tomorrow', '', nx.task.id + '|tomorrow')}${mi('snooze', 'Waiting on someone', '', nx.task.id + '|waiting')}</div>` : ''}`
+        : `<div class="mi">${esc(nx.reason)}</div>`}
+      <div class="sep"></div>
+      ${mi('palette', 'Add task…', '⌥Space')}
+      ${mi('panel', `Suggestions (${S.suggestions.length})`, '▸', 'sug')}
+      ${S.panel === 'sug' ? `<div class="sub">${S.suggestions.map(s => mi('sugAccept', '✓ ' + esc(s.title), s.source, s.id)).join('')}</div>` : ''}
+      ${mi('panel', `Worth knowing (${S.digest.length})`, '▸', 'dig')}
+      ${S.panel === 'dig' ? `<div class="sub">${S.digest.map((d, i) => mi('digestPromote', esc(d), '→ Sugg.', i)).join('')}</div>` : ''}
+    </div>`;
+  }
+  const pal = S.palette ? `<div class="palette"><input type="text" data-in="draft" placeholder="New task…" value="${esc(S.draft)}" autofocus>
+    <div class="hint">↩ add to ${esc(pname(now.kind === 'guess' ? null : now.project))} &nbsp; ⌘↩ add and start now &nbsp; esc cancel</div></div>` : '';
+  const toast = S.toast ? `<div class="bannerA">${toastHTML()}</div>` : '';
+  return { bar, overlay: menu + pal + toast };
+}
+
+// ===================== Variant C: floating HUD =====================
+function VariantC() {
+  const now = resolveNow(), c = committedTask(), nx = nextPick(), nd = nudge(), pr = prompts(), w = win();
+  const bar = `<div class="mb-item" data-a="toggle">${pdot(now.project, now.kind === 'guess')}</div>`;
+  const toasts = pr.map(p => `<div class="toastC"><b>${esc(p.text)}</b>${p.sub ? ` <span class="dim tiny">${esc(p.sub)}</span>` : ''}${promptActions(p)}</div>`).join('')
+    + (S.toast ? `<div class="toastC">${toastHTML()}</div>` : '');
+  const expanded = S.open;
+  const pill = `<div class="pill ${nd ? 'drift' : ''}">
+    ${nd ? `<div style="margin-bottom:6px">${esc(nd.text)}</div><div class="btns" style="margin-bottom:8px"><button class="btn pri" data-a="nudgeBack">Back to it</button><button class="btn" data-a="nudgeSwitch">Switch</button><button class="btn" data-a="nudgeRelated">Related</button><button class="btn" data-a="nudgeQuiet">Quiet 30m</button></div><hr>` : ''}
+    <div class="rowC" data-a="toggle" style="cursor:pointer">
+      <div style="flex:1;min-width:0"><div class="lbl">NOW · ${S.committedFor}m</div><div class="t">${c ? esc(c.title) : esc(pname(now.project))}</div></div>
+      <div style="opacity:.4">→</div>
+      <div style="flex:1;min-width:0"><div class="lbl">NEXT</div><div class="t">${nx.task ? esc(nx.task.title) : esc(nx.reason)}</div></div>
+    </div>
+    ${expanded ? `<hr>
+      <div class="rowC" style="justify-content:space-between">${nowChip(now)} <span class="tiny" style="opacity:.6">${esc(short(w.app + ' · ' + w.title, 30))}</span></div>
+      <div class="tiny" style="opacity:.6;margin-top:3px">${esc(now.evidence)}</div>
+      ${S.panel === 'notthis' ? notThisChoices() : `<div class="btns">${c ? '<button class="btn" data-a="done">Done</button>' : ''}<button class="btn" data-a="notThis">Not this →</button>${!isNeutral(w) ? `<button class="btn" data-a="markNeutral">Neutral</button>` : ''}</div>`}
+      <hr>
+      ${nx.task ? `<div class="tiny" style="opacity:.75">Next: ${esc(nx.reason)}</div><div class="btns"><button class="btn pri" data-a="accept" data-arg="${nx.task.id}">Start</button><button class="btn" data-a="skip" data-arg="${nx.task.id}">Skip</button><button class="btn" data-a="snooze" data-arg="${nx.task.id}|1h">+1h</button><button class="btn" data-a="snooze" data-arg="${nx.task.id}|tomorrow">Tmrw</button><button class="btn" data-a="snooze" data-arg="${nx.task.id}|waiting">Waiting</button></div>` : ''}
+      <hr>
+      <div class="tiny" style="opacity:.75;margin-bottom:4px">${S.suggestions.length} Suggestions · ${S.digest.length} Worth knowing</div>
+      <input type="text" data-in="draft" placeholder="+ Add a task (Enter)…" value="${esc(S.draft)}">
+      <label class="tiny" style="opacity:.6"><input type="checkbox" data-in="startNow" ${S.startNow ? 'checked' : ''}> start now</label>`
+    : ''}
+  </div>`;
+  return { bar, overlay: `<div class="hud">${toasts}${pill}</div>` };
+}
+
+// ===================== render =====================
+const VARIANTS = [['A', 'Rich popover', VariantA], ['B', 'Native menu', VariantB], ['C', 'Floating HUD', VariantC]];
+let current = new URLSearchParams(location.search).get('variant') || 'A';
+
+function render() {
+  const [key, name, fn] = VARIANTS.find(v => v[0] === current) || VARIANTS[0];
+  const w = win(), v = fn();
+  document.getElementById('desk').innerHTML = `
+    <div class="menubar"><span></span><span class="app">${esc(w.app)}</span><span>File</span><span>Edit</span><span>View</span><span>Window</span>
+      <span class="right">${v.bar}<span>􀙇</span><span>${hhmm(S.clock)}</span></span></div>
+    <div class="win ${w.dark ? 'dark' : ''}" data-a="close"><div class="tb"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i>&nbsp; ${esc(w.title)}</div>
+      <div class="body">${w.excluded ? '🔒 Excluded — the assistant reads nothing here' : Array.from({ length: 9 }, (_, i) => '▬'.repeat(4 + (i * 7) % 13)).join('<br>')}</div></div>
+    <div class="dock"></div>
+    ${v.overlay}`;
+  document.getElementById('swl').textContent = `${key} (${name})`;
+
+  const now = resolveNow(), nx = nextPick(), c = committedTask();
+  document.getElementById('sim').innerHTML = `
+    <div class="badge-proto">PROTOTYPE · #8</div>
+    <h4>Foreground window</h4>
+    ${WINDOWS.map(x => `<button class="${x.id === S.win ? 'sel' : ''}" data-a="sw" data-arg="${x.id}"><b>${esc(x.app)}</b> <span class="dim">${esc(short(x.title, 30))}</span></button>`).join('')}
+    <h4>Time</h4>
+    <div class="row"><button data-a="tick" data-arg="1">+1m</button><button data-a="tick" data-arg="3">+3m</button><button data-a="tick" data-arg="5">+5m</button><button data-a="tick" data-arg="15">+15m</button></div>
+    <h4>Drift threshold: ${S.driftThreshold}m</h4>
+    <div class="row"><button data-a="thr" data-arg="-1">−1</button><button data-a="thr" data-arg="1">+1</button></div>
+    <h4>Events</h4>
+    <button data-a="propose">Figma recurs on a 2nd day → propose Project</button>
+    <button data-a="reset">Reset scenario</button>
+    <h4>Try</h4>
+    <div class="ev">1. Switch to YouTube, +3m → Haiku guess.<br>2. Switch to Reddit, +5m → Nudge; +10m → "New task?".<br>3. Slack: +5m stays held; +15m drops.<br>4. Skip Next 3× (+ time) → snooze/drop.<br>5. Correct Figma with Not this →, then Always.</div>`;
+
+  document.getElementById('state').innerHTML = `
+    <h4>Now</h4><pre>clock        ${hhmm(S.clock)}
+window       ${esc(w.app)} · ${esc(short(w.title, 26))}
+key          ${esc(w.key)}
+on window    ${S.onWin}m
+resolved     ${now.kind} → ${esc(pname(now.project))}
+evidence     ${esc(now.evidence)}
+lastProject  ${esc(pname(S.lastProject))}
+neutralFor   ${S.neutralFor}m / 15
+override     ${S.override ? esc(S.override.value) : '–'}</pre>
+    <h4>Commit & Drift</h4><pre>committed    ${c ? esc(c.title) : '–'}
+committedFor ${S.committedFor}m
+driftMin     ${S.driftMin} / ${S.driftThreshold}${S.nudgeDismissed ? ' (dismissed)' : ''}${S.nudgeQuietUntil > S.clock ? ` (quiet → ${hhmm(S.nudgeQuietUntil)})` : ''}
+noProjectMin ${S.noProjectMin} / 10
+resumeTask   ${S.resumeTask ? esc(task(S.resumeTask).title) : '–'}</pre>
+    <h4>Next</h4><pre>${nx.task ? esc(nx.task.title) : '–'}
+${esc(nx.reason)}
+free until   ${esc(freeUntil().label)}</pre>
+    <h4>Tasks</h4><pre>${S.tasks.map(t => `${t.status.padEnd(9)} ${esc(short(t.title, 26))}${S.skipCounts[t.id] ? ` skip×${S.skipCounts[t.id]}` : ''}`).join('\n')}</pre>
+    <h4>Your Matchers / Neutral</h4><pre>${Object.entries(S.userMatchers).map(([k, v]) => `${esc(k)} → ${esc(pname(v))}`).join('\n') || '–'}
+${S.userNeutral.map(k => `${esc(k)} → Neutral`).join('\n')}</pre>
+    <h4>Prompts</h4><pre>${prompts().map(p => esc(p.text)).join('\n') || '–'}${nudge() ? '\nNUDGE: ' + esc(nudge().text) : ''}</pre>
+    <h4>Log</h4><div class="ev">${S.events.map(esc).join('<br>')}</div>`;
+
+  const inp = document.querySelector('[data-in="draft"]');
+  if (inp && (S.palette || S.focusDraft)) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+}
+
+// ===================== wiring =====================
+document.addEventListener('click', e => {
+  const sw = e.target.closest('[data-sw]');
+  if (sw) { cycle(+sw.dataset.sw); return; }
+  const el = e.target.closest('[data-a]');
+  if (!el) return;
+  if (el.dataset.a === 'close' && !S.open && !S.palette) return;
+  OPS[el.dataset.a]?.(el.dataset.arg);
+  S.focusDraft = false;
+  render();
+});
+document.addEventListener('input', e => {
+  const k = e.target.dataset.in; if (!k) return;
+  if (k === 'startNow') { S.startNow = e.target.checked; return; }
+  S[k] = e.target.value;
+});
+document.addEventListener('keydown', e => {
+  const typing = e.target.matches('input[type=text], textarea, [contenteditable]');
+  if (typing && e.key === 'Enter') { if (e.metaKey) S.startNow = true; OPS.quickAdd(); if (e.metaKey) S.startNow = false; S.focusDraft = current !== 'B'; render(); return; }
+  if (typing && e.key === 'Escape') { S.palette = false; S.draft = ''; render(); return; }
+  if (e.altKey && e.code === 'Space') { e.preventDefault(); OPS.palette(); render(); return; }
+  if (typing) return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+  if (e.key === 'Escape') { OPS.close(); render(); }
+});
+function cycle(d) {
+  const i = VARIANTS.findIndex(v => v[0] === current);
+  current = VARIANTS[(i + d + VARIANTS.length) % VARIANTS.length][0];
+  const u = new URL(location); u.searchParams.set('variant', current); history.replaceState(null, '', u);
+  S.open = false; S.panel = null; S.palette = false;
+  render();
+}
+render();
+</script>
+</body>
+</html>
