@@ -25,6 +25,7 @@ A **v1 spec** for a personal Mac assistant for Dara. The spec is ready to hand t
 ## Decisions so far
 
 <!-- one line per closed ticket -->
+- [Which macOS activity signals can we read?](wayfinder-v1-spec/0002-macos-activity-signals.md): Always on: active app (no permission), window title via Accessibility (VS Code title set to show path and branch), EventKit calendar and idle time. Browser URL (Automation) and git (FSEvents) are read on events. ScreenCaptureKit window screenshots (~$0.002 each on Haiku) only when unsure.
 
 ## Not yet specified
 
