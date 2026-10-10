@@ -25,6 +25,7 @@ A **v1 spec** for a personal Mac assistant for Dara. The spec is ready to hand t
 ## Decisions so far
 
 <!-- one line per closed ticket -->
+- [How can it read Gmail, Google Sheets and notes?](wayfinder-v1-spec/0003-gmail-sheets-notes-access.md): own Google OAuth desktop client (In Production, personal-use unverified) polling Gmail `readonly` + Sheets `readonly` in the background; Apple Notes via AppleScript, Keep has no consumer API; Claude connectors/Google MCP only for interactive use. Notes app still to confirm.
 
 ## Not yet specified
 
