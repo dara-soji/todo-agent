@@ -31,13 +31,14 @@ A **v1 spec** for a personal Mac assistant for Dara. The spec is ready to hand t
 - [What can Claude-native vs standalone builds do?](wayfinder-v1-spec/0004-build-options.md): You need a native helper either way, since Claude Code can't sense the frontmost app or draw a menu bar. Per-minute awareness on Haiku 5.5 via the API costs about $0.05/day, versus about $2–8/day inside Claude Code on Opus. Leaning hybrid (helper + MCP + Claude Code skills), to be decided in 0007.
 - [How are Tasks shaped, and how is Next chosen?](wayfinder-v1-spec/0005-task-model-and-next.md): first-class Projects map Signals to work; by-hand and code Tasks are direct, while email, Sheets and notes become one-click Suggestions (7-day expiry). Next = calendar-gap and deadline filters + score, AI tie-break with a reason, never empty. Accepting Next commits; Drift after ~5 min; interrupts over ~10 min prompt "New task?"
 - [What makes an email important?](wayfinder-v1-spec/0006-email-importance.md): Inbox emails go through rules and then Haiku, which sorts each one as Action → Suggestion (one per thread, guessed deadline applied only on accept), Worth knowing → menu-bar Digest (clears on read or after 24h), or Noise. VIP list plus recent correspondents; notifications only for a VIP Action due today or tomorrow. Corrections are explicit only.
+- [Pick the build platform](wayfinder-v1-spec/0007-build-platform.md): hybrid. An always-on Swift menu-bar helper owns sensing, Now/Next (Haiku awareness, Sonnet tie-break), background Gmail/Sheets/Notes imports and Triage, and a SQLite task store it alone writes. Claude Code is conversation only and reaches the store via the helper's local MCP server. API key only. ADR `docs/adr/0001-hybrid-helper-owns-state.md`.
 
 ## Not yet specified
 
-- **Acting layer**: which concrete actions it takes first (opening project and files, filing notes, editing Sheets, drafting email replies) and how Dara "points it at things". This depends on the platform and on the guardrails.
+- **Acting layer**: which concrete actions it takes first (opening project and files, filing notes, editing Sheets, drafting email replies) and how Dara "points it at things". This depends on the guardrails. Non-screen actions are helper MCP or API calls. Screen control is open: either add a Pro/Max plan for Claude Code computer use, or have the helper drive the Mac via the API computer-use tool (billing is currently API key only).
 - **Voice**: whether to support push-to-talk or a wake word, local or cloud speech-to-text, and how voice commands map to actions.
 - **Learning support**: whether the .NET/C# learning gets special handling (a study plan, progress tracking, "next lesson" as a Next) or is just ordinary tasks.
-- **Daily rhythm**: morning plan and end-of-day review (including expiring Suggestions, the email Digest, and "Plan tomorrow").
+- **Daily rhythm**: morning plan and end-of-day review (including expiring Suggestions, the email Digest, and "Plan tomorrow"). These are likely Claude Code conversations over the helper's MCP tools.
 - **History**: whether it keeps a log of what Dara worked on (a timesheet or weekly summary), and for how long.
 
 ## Out of scope
