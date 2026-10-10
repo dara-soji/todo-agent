@@ -44,8 +44,16 @@ The list of Worth-knowing lines the assistant shows alongside Now/Next.
 A sender whose mail is never dropped as bulk mail, either listed by the user or someone the user has recently emailed. A VIP's mail is still triaged.
 
 **Project**:
-An ongoing body of work (a repo, a course, a sheet the user keeps) that Signals can be matched to. A Task may belong to one Project.
+An ongoing body of work (a repo, a course, a sheet the user keeps) that Signals can be matched to through its Matchers. A Project is declared by the user or proposed by the assistant and accepted by the user. A Project is either active or archived, and an archived Project matches nothing. Projects do not nest. A Task may belong to one Project.
 _Avoid_: tag, area, context
+
+**Matcher**:
+A rule saying that a Signal belongs to a Project: a repo path, a Sheet, a URL prefix, or a calendar keyword. A Matcher on an email sender or thread assigns a Suggestion's Project but never sets Now. When several Matchers fit, the most specific one wins.
+_Avoid_: rule, mapping, filter
+
+**Neutral**:
+An app or site used across all work (Terminal outside a repo, chat, search, reference docs). A Neutral Signal leaves Now on the last matched Project for a short while instead of counting as no Project.
+_Avoid_: ignored, generic
 
 **Committed Task**:
 The Task the user has accepted as what they are doing now, usually by accepting Next. Drift is measured against it.
