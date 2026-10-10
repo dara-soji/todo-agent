@@ -25,6 +25,7 @@ A **v1 spec** for a personal Mac assistant for Dara. The spec is ready to hand t
 ## Decisions so far
 
 <!-- one line per closed ticket -->
+- [What can Claude-native vs standalone builds do?](wayfinder-v1-spec/0004-build-options.md): You need a native helper either way, since Claude Code can't sense the frontmost app or draw a menu bar. Per-minute awareness on Haiku 5.5 via the API costs about $0.05/day, versus about $2–8/day inside Claude Code on Opus. Leaning hybrid (helper + MCP + Claude Code skills), to be decided in 0007.
 
 ## Not yet specified
 
