@@ -5,7 +5,7 @@ A Mac assistant that knows what its one user is working on and says what comes n
 ## Language
 
 **Now**:
-The single piece of work the user is doing at this moment, as inferred from activity signals.
+The single piece of work the user is doing at this moment, inferred from Signals and resolved to a Project and, where possible, a Task.
 _Avoid_: current task, focus
 
 **Next**:
@@ -19,11 +19,23 @@ _Avoid_: todo, item, ticket
 **Source**:
 Where a Task originated: email, notes, a Google Sheet, code work, or added by hand.
 
+**Suggestion**:
+A candidate Task found in a Source that waits for the user to accept or dismiss it. Accepting turns it into a Task.
+_Avoid_: inbox item, pending task
+
+**Project**:
+An ongoing body of work (a repo, a course, a sheet the user keeps) that Signals can be matched to. A Task may belong to one Project.
+_Avoid_: tag, area, context
+
+**Committed Task**:
+The Task the user has accepted as what they are doing now, usually by accepting Next. Drift is measured against it.
+_Avoid_: active task, current task
+
 **Signal**:
 One observable piece of evidence about what the user is doing (active app, window title, calendar event, screenshot).
 
 **Drift**:
-When Now no longer matches the Task the user committed to.
+When Now has matched a different Project, or no Project, for longer than a short grace period while there is a Committed Task.
 
 **Nudge**:
 A light prompt the assistant shows when it detects Drift.
