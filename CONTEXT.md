@@ -69,4 +69,30 @@ When Now has matched a different Project, or no Project, for longer than a short
 A light prompt the assistant shows when it detects Drift.
 
 **Guardrail**:
-A rule deciding whether an action runs on its own or must ask the user first.
+The rule placing each Operation in one tier (Auto, Ask or Never). The helper enforces it, whoever starts the Operation.
+
+**Operation**:
+Anything the assistant does that changes state, in its own task store or outside it (a Task edit, opening a file, drafting or sending an email).
+_Avoid_: action (taken by Action email), command
+
+**Auto**:
+The tier for an Operation that runs without asking: it is private to the user, undoable, and invisible to anyone else.
+
+**Ask**:
+The tier for an Operation that waits for the user to confirm it in the menu bar. An unanswered Ask expires and does not run.
+_Avoid_: approval, prompt
+
+**Never**:
+The tier for an Operation the assistant does not perform at all: money, credentials, system or security settings, permanent deletion, anything inside an Excluded app.
+
+**Excluded**:
+An app, site, email sender or notes folder the assistant must not read or send anywhere. Private-browsing windows, secure text fields and system password prompts are always Excluded. Excluded time counts as Neutral.
+_Avoid_: blocked, private, ignored
+
+**Operation log**:
+The local record of every Operation: its tier, who started it, whether it was confirmed, and how to undo it.
+_Avoid_: audit log (that is the API audit log), history
+
+**Now history**:
+The local record of Now as Project-level time blocks, with no window titles or URLs.
+_Avoid_: timesheet, activity log
