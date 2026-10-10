@@ -23,6 +23,26 @@ Where a Task originated: email, notes, a Google Sheet, code work, or added by ha
 A candidate Task found in a Source that waits for the user to accept or dismiss it. Accepting turns it into a Task.
 _Avoid_: inbox item, pending task
 
+**Triage**:
+The assistant's sorting of each incoming email into exactly one of Action, Worth knowing, or Noise.
+
+**Action email**:
+An email asking the user to do, reply to, or decide something, or carrying a deadline. Becomes a Suggestion.
+_Avoid_: important email, urgent email
+
+**Worth knowing**:
+An email the user should see but need not act on. Shown as a line in the Digest, never a Suggestion.
+_Avoid_: FYI, info email
+
+**Noise**:
+An email Triage drops silently.
+
+**Digest**:
+The list of Worth-knowing lines the assistant shows alongside Now/Next.
+
+**VIP**:
+A sender whose mail is never dropped as bulk mail, either listed by the user or someone the user has recently emailed. A VIP's mail is still triaged.
+
 **Project**:
 An ongoing body of work (a repo, a course, a sheet the user keeps) that Signals can be matched to. A Task may belong to one Project.
 _Avoid_: tag, area, context
