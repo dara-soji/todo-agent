@@ -23,10 +23,10 @@ final class TasksMenu: NSObject {
         return [menuItem("Start", #selector(start(_:)), id), menuItem("Skip", #selector(skip(_:)), id), snoozeItem(id)]
     }
 
-    /// Prompts waiting for a decision, at the top of the dropdown.
-    func promptItems() -> [NSMenuItem] {
-        assistant.prompts.compactMap { prompt in
-            switch prompt {
+    /// Decisions waiting for Dara, at the top of the dropdown.
+    func decisionItems() -> [NSMenuItem] {
+        assistant.decisions.compactMap { decision in
+            switch decision {
             case let .skippedThreeTimes(id):
                 guard let task = assistant.task(id) else { return nil }
                 let item = NSMenuItem(title: "Skipped 3×: \(task.title)", action: nil, keyEquivalent: "")
@@ -110,7 +110,7 @@ final class TasksMenu: NSObject {
     @objc private func keep(_ sender: NSMenuItem) { attempt(sender) { try assistant.keepTask($0) } }
 
     @objc private func snoozeHour(_ sender: NSMenuItem) {
-        attempt(sender) { try assistant.snoozeTask($0, until: Date().addingTimeInterval(60 * 60)) }
+        attempt(sender) { try assistant.snoozeTask($0, forHours: 1) }
     }
 
     @objc private func snoozeTomorrow(_ sender: NSMenuItem) {

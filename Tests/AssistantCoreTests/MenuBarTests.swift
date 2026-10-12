@@ -67,15 +67,15 @@ import AssistantCore
         #expect(assistant.menuBar.committedTaskTitle == "Write the quick-add palette")
     }
 
-    @Test func flagsWaitingPromptsAndShowsNext() throws {
+    @Test func flagsWaitingDecisionsAndShowsNext() throws {
         let assistant = makeAssistant()
         #expect(assistant.menuBar.nextTitle == "Plan tomorrow")
 
         let task = try assistant.quickAdd("Avoided")
         #expect(assistant.menuBar.nextTitle == "Avoided")
-        #expect(!assistant.menuBar.promptsWaiting)
+        #expect(!assistant.menuBar.decisionsWaiting)
 
         for _ in 1...3 { try assistant.skipTask(task.id) }
-        #expect(assistant.menuBar.promptsWaiting)
+        #expect(assistant.menuBar.decisionsWaiting)
     }
 }

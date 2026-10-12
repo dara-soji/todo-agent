@@ -66,7 +66,25 @@ import AssistantCore
 
         #expect(assistant.next.task == long.id)
         #expect(assistant.next.wontFitBefore == clock.now + 20 * 60)
-        #expect(assistant.menuBar.nextReason == "Won't fit before 04:20")
+        #expect(assistant.menuBar.nextReason == "Oldest open Task · won't fit before 04:20")
+    }
+
+    @Test func aTaskDueWithinADayIsNextEvenIfItWontFit() throws {
+        let assistant = makeAssistant()
+        let overdue = try add(assistant, "Overdue report", effort: .large, dueIn: -1)
+        try add(assistant, "Quick tidy", effort: .small)
+        assistant.receive(.calendar(events: [meeting(startsIn: 45)]))
+
+        #expect(assistant.next.task == overdue.id)
+        #expect(assistant.menuBar.nextReason == "Overdue · won't fit before 04:45")
+    }
+
+    @Test func meetingsAfterTodayDontLimitTheFreeBlock() throws {
+        let assistant = makeAssistant()
+        try add(assistant, "Long", effort: .large)
+        clock.advance(minutes: 19 * 60)  // 23:00
+        assistant.receive(.calendar(events: [meeting(startsIn: 90)]))  // 00:30 tomorrow
+        #expect(assistant.next.wontFitBefore == nil)
     }
 
     @Test func theFreeBlockStartsWhenAMeetingUnderWayEnds() throws {
@@ -155,6 +173,18 @@ import AssistantCore
         #expect(assistant.menuBar.nextReason == "Oldest open Task")
     }
 
+    @Test func aSkippedInterruptedTaskWaitsLikeAnyOther() throws {
+        let assistant = makeAssistant()
+        let other = try add(assistant, "Other")
+        let interrupted = try assistant.quickAdd("Refactor", start: true)
+        let interruption = try assistant.quickAdd("Landlord", start: true)
+        try assistant.completeTask(interruption.id)
+
+        try assistant.skipTask(interrupted.id)
+
+        #expect(assistant.next.task == other.id)
+    }
+
     @Test func theInterruptedTaskComesBackFirst() throws {
         let assistant = makeAssistant()
         try add(assistant, "Urgent but new", dueIn: 1)
@@ -204,22 +234,38 @@ import AssistantCore
         let task = try add(assistant, "Avoided")
         try assistant.skipTask(task.id)
         try assistant.skipTask(task.id)
-        #expect(assistant.prompts.isEmpty)
+        #expect(assistant.decisions.isEmpty)
 
         try assistant.skipTask(task.id)
 
-        #expect(assistant.prompts == [.skippedThreeTimes(task.id)])
+        #expect(assistant.decisions == [.skippedThreeTimes(task.id)])
     }
 
-    @Test func keepingASkippedTaskClearsThePromptAndItsSkips() throws {
+    @Test func keepingASkippedTaskClearsTheDecisionButItStillSitsOutItsSkip() throws {
         let assistant = makeAssistant()
         let task = try add(assistant, "Avoided")
+        let other = try add(assistant, "Other")
         for _ in 1...3 { try assistant.skipTask(task.id) }
 
         try assistant.keepTask(task.id)
 
-        #expect(assistant.prompts.isEmpty)
-        #expect(assistant.next.task == task.id)
+        #expect(assistant.decisions.isEmpty)
+        #expect(assistant.next.task == other.id)
+        try assistant.skipTask(task.id)
+        #expect(assistant.decisions.isEmpty)
+    }
+
+    @Test func onlyAnOpenTaskCanBeSkipped() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Committed", start: true)
+        #expect(throws: Assistant.Failure.notOpen(task.id)) { try assistant.skipTask(task.id) }
+    }
+
+    @Test func snoozingForAnHourWakesItAnHourLater() throws {
+        let assistant = makeAssistant()
+        let task = try add(assistant, "Later")
+        try assistant.snoozeTask(task.id, forHours: 1)
+        #expect(assistant.task(task.id)?.status == .snoozed(until: clock.now + 60 * 60, note: nil))
     }
 
     @Test func snoozingTillTomorrowWakesItAtNineTheNextMorning() throws {
@@ -231,12 +277,12 @@ import AssistantCore
 
         let nine = Date(timeIntervalSince1970: 1_791_000_000 + (24 + 5) * 60 * 60)  // Sunday 09:00 UTC
         #expect(assistant.task(task.id)?.status == .snoozed(until: nine, note: nil))
-        #expect(assistant.prompts.isEmpty)
+        #expect(assistant.decisions.isEmpty)
 
         clock.advance(minutes: 30 * 60)
         assistant.receive(.userIdle(seconds: 0))
         #expect(assistant.task(task.id)?.status == .open)
-        #expect(assistant.prompts.isEmpty)
+        #expect(assistant.decisions.isEmpty)
     }
 
     @Test func droppingASkippedTaskClearsThePrompt() throws {
@@ -246,7 +292,7 @@ import AssistantCore
 
         try assistant.dropTask(task.id)
 
-        #expect(assistant.prompts.isEmpty)
+        #expect(assistant.decisions.isEmpty)
     }
 
     // MARK: Stored Tasks

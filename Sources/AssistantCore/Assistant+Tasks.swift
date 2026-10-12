@@ -87,6 +87,10 @@ extension Assistant {
         }
     }
 
+    public func snoozeTask(_ id: Task.ID, forHours hours: Double, by startedBy: StartedBy = .dara) throws {
+        try snoozeTask(id, until: clock.now + hours * 60 * 60, by: startedBy)
+    }
+
     /// Snoozes until 9:00 tomorrow.
     public func snoozeTillTomorrow(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: clock.now))!
@@ -117,6 +121,7 @@ extension Assistant {
 
     /// Takes the Task out of Next for two hours. The third skip asks Dara what to do with it.
     public func skipTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+        guard try existing(id).status == .open else { throw Failure.notOpen(id) }
         let until = clock.now + Self.skipFor
         try change(id, .skipTask, "Skipped", by: startedBy) {
             $0.skippedUntil = until
@@ -124,9 +129,10 @@ extension Assistant {
         }
     }
 
-    /// Dara's "Keep it" for a Task skipped three times: it stays, and its skips start over.
+    /// Dara's "Keep it" for a Task skipped three times: its skips start over, though it still sits
+    /// out the skip just made.
     public func keepTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .keepTask, "Kept", by: startedBy) { $0.clearSkips() }
+        try change(id, .keepTask, "Kept", by: startedBy) { $0.skipCount = 0 }
     }
 
     /// How long Skip keeps a Task out of Next.
@@ -134,7 +140,8 @@ extension Assistant {
     /// The skip that asks what to do.
     static let skipsBeforeAsking = 3
 
-    public var prompts: [Prompt] {
+    /// Choices waiting for Dara in the menu.
+    public var decisions: [Decision] {
         tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
     }
 

@@ -69,6 +69,10 @@ _Avoid_: idle (that is the Signal), inactive
 **Drift**:
 When Now has matched a different Project, or no Project, for longer than a short grace period while there is a Committed Task.
 
+**Decision**:
+A choice waiting for the user in the menu, such as what to do with a Task skipped three times. Decisions collect in the menu and never pop up on their own.
+_Avoid_: prompt (taken by Ask), alert
+
 **Nudge**:
 A light prompt the assistant shows when it detects Drift.
 

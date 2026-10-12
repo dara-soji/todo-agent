@@ -5,7 +5,7 @@ public enum Next: Equatable, Sendable {
     /// `wontFitBefore` is set when no open Task fits the next free calendar block, so this is
     /// the best one anyway, and it won't be finished before that time.
     case task(Task.ID, reason: Reason, wontFitBefore: Date?)
-    /// Nothing is open.
+    /// Nothing is open. Once Suggestions exist (ticket 13), "Review Suggestions (n)" comes before this.
     case planTomorrow
 
     /// The deciding factor, as shown under Next.
@@ -29,14 +29,16 @@ public enum Next: Equatable, Sendable {
     }
 }
 
-/// Something waiting for Dara's decision in the menu. Prompts never pop up on their own.
-public enum Prompt: Equatable, Sendable {
+/// Something waiting for Dara's choice in the menu. Decisions never pop up on their own.
+public enum Decision: Equatable, Sendable {
     /// Skipped three times: Snooze till tomorrow, Drop it, or Keep it.
     case skippedThreeTimes(Task.ID)
 }
 
-/// How Next is chosen: candidates that fit the next free block, ranked by deadline urgency,
-/// then continuing Now's Project, then deep-in-the-morning / shallow-in-the-afternoon, then age.
+/// How Next is chosen: an interrupted Task comes back first; otherwise candidates that fit the next
+/// free block, ranked by deadline urgency, then continuing Now's Project, then deep-in-the-morning /
+/// shallow-in-the-afternoon, then age. Deadlines come first: a Task due within a day is never
+/// filtered out for not fitting; it is flagged instead.
 struct NextRule {
     /// Effort as time, for fitting the free block. Unknown effort is assumed to fit.
     static let minutes: [Task.Effort: Double] = [.small: 30, .medium: 90, .large: 180]
@@ -49,30 +51,36 @@ struct NextRule {
     let events: [CalendarEvent]
 
     func choose(from open: [Task]) -> Next {
-        if let resume = open.filter(\.resumeAfterInterruption).min(by: { $0.created < $1.created }) {
-            return .task(resume.id, reason: .resume, wontFitBefore: nil)
-        }
         // A skipped Task sits out its two hours, unless nothing else is open.
         let notSkipped = open.filter { ($0.skippedUntil ?? .distantPast) <= now }
         let candidates = notSkipped.isEmpty ? open : notSkipped
         guard !candidates.isEmpty else { return .planTomorrow }
+        if let resume = candidates.filter(\.resumeAfterInterruption).min(by: { $0.created < $1.created }) {
+            return .task(resume.id, reason: .resume, wontFitBefore: nil)
+        }
 
         let block = freeBlock()
+        let best = candidates.min(by: ranksAbove)!
+        if urgency(best) == Self.dueWithinADay {
+            return .task(best.id, reason: reason(for: best), wontFitBefore: fits(best, block) ? nil : block.end)
+        }
         let fitting = candidates.filter { fits($0, block) }
         let pool = fitting.isEmpty ? candidates : fitting
-        let best = pool.min(by: ranksAbove)!
-        return .task(best.id, reason: reason(for: best), wontFitBefore: fitting.isEmpty ? block.end : nil)
+        let chosen = pool.min(by: ranksAbove)!
+        return .task(chosen.id, reason: reason(for: chosen), wontFitBefore: fitting.isEmpty ? block.end : nil)
     }
 
     // MARK: Free block
 
-    /// From now, or the end of any meetings under way, to the start of the next meeting (nil: no more today).
+    /// From now, or the end of any meetings under way, to the start of the next meeting today
+    /// (nil: no more meetings today).
     private func freeBlock() -> (start: Date, end: Date?) {
         var start = now
         while let ends = events.filter({ $0.isUnderWay(at: start) }).map(\.end).max() {
             start = ends
         }
-        return (start, events.map(\.start).filter { $0 >= start }.min())
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: start))!
+        return (start, events.map(\.start).filter { $0 >= start && $0 < endOfDay }.min())
     }
 
     private func fits(_ task: Task, _ block: (start: Date, end: Date?)) -> Bool {
@@ -94,12 +102,16 @@ struct NextRule {
         return a.title < b.title
     }
 
-    /// 2: overdue or due within a day; 1: due within a week; 0: later or no deadline.
+    private static let dueWithinADay = 2
+    private static let dueWithinAWeek = 1
+
+    /// Overdue or due within a day, due within a week, or later / no deadline (0). Deadlines further
+    /// out don't outrank anything yet.
     private func urgency(_ task: Task) -> Int {
         guard let deadline = task.deadline else { return 0 }
         let left = deadline.timeIntervalSince(now)
-        if left <= 24 * 60 * 60 { return 2 }
-        if left <= 7 * 24 * 60 * 60 { return 1 }
+        if left <= 24 * 60 * 60 { return Self.dueWithinADay }
+        if left <= 7 * 24 * 60 * 60 { return Self.dueWithinAWeek }
         return 0
     }
 

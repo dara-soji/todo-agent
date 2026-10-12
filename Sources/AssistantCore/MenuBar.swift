@@ -28,14 +28,14 @@ public struct MenuBar: Equatable, Sendable {
     public let nextTitle: String
     /// Why it is Next, in one line.
     public let nextReason: String?
-    /// Prompts are waiting in the dropdown: the menu-bar item shows an amber ●.
-    public let promptsWaiting: Bool
+    /// Decisions are waiting in the dropdown: the menu-bar item shows an amber ●.
+    public let decisionsWaiting: Bool
 
     /// Longest menu-bar title, ellipsis included.
     static let titleLimit = 15
 
-    init(_ now: Now, project: Project?, branch: String?, committedTask: Task?, next: NextLine, promptsWaiting: Bool) {
-        self.promptsWaiting = promptsWaiting
+    init(_ now: Now, project: Project?, branch: String?, committedTask: Task?, next: NextLine, decisionsWaiting: Bool) {
+        self.decisionsWaiting = decisionsWaiting
         self.committedTaskTitle = committedTask?.title
         self.nextTitle = next.title
         self.nextReason = next.reason
@@ -93,11 +93,7 @@ struct NextLine {
             return
         }
         title = task.title
-        if let wontFitBefore {
-            self.reason = "Won't fit before \(Self.format(wontFitBefore, "HH:mm", calendar))"
-            return
-        }
-        self.reason = switch reason {
+        let why = switch reason {
         case .resume: "Back to what you were doing before the interruption"
         case let .due(deadline): Self.due(deadline, now: now, calendar: calendar)
         case let .continues(id): "Continues \(project(id)?.shortName.uppercased() ?? "this Project")"
@@ -105,6 +101,7 @@ struct NextLine {
         case .shallowInTheAfternoon: "A shallow one for the afternoon"
         case .oldest: "Oldest open Task"
         }
+        self.reason = wontFitBefore.map { "\(why) · won't fit before \(Self.format($0, "HH:mm", calendar))" } ?? why
     }
 
     private static func due(_ deadline: Date, now: Date, calendar: Calendar) -> String {
@@ -133,6 +130,6 @@ extension Assistant {
             now, project: now.project.flatMap(project), branch: now.evidence.flatMap(branch(of:)),
             committedTask: committedTask,
             next: NextLine(next, task: next.task.flatMap(task), project: project, now: clock.now, calendar: calendar),
-            promptsWaiting: !prompts.isEmpty)
+            decisionsWaiting: !decisions.isEmpty)
     }
 }

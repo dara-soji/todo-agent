@@ -11,6 +11,8 @@ public final class Assistant {
         /// The helper may at most suggest "done?"; Dara marks a Task done, directly or in conversation.
         case onlyDaraMarksDone
         case deletedTask(Task.ID)
+        /// Only an open Task can be skipped.
+        case notOpen(Task.ID)
         /// At most one Task is committed; this Operation would leave two.
         case secondCommittedTask
         /// The Tasks or Projects an entry wrote have changed since, so undoing it would lose that change.
