@@ -25,7 +25,7 @@ public struct MenuBar: Equatable, Sendable {
     static let titleLimit = 15
 
     init(_ now: Now, project: Project?, branch: String?) {
-        guard let active = now.window else {
+        guard now.window != nil || now.match != nil else {
             title = "—"
             marker = .unknown
             nowDetail = "Waiting for the first Signal"
@@ -33,10 +33,9 @@ public struct MenuBar: Equatable, Sendable {
             window = nil
             return
         }
-        if let title = active.title, !title.isEmpty {
-            window = "\(active.app.name) — \(title)"
-        } else {
-            window = active.app.name
+        window = now.window.map { active in
+            guard let title = active.title, !title.isEmpty else { return active.app.name }
+            return "\(active.app.name) — \(title)"
         }
         if now.isAway {
             title = "AWAY"

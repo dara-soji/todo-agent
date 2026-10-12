@@ -29,14 +29,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func drawTitle() {
         let title = NSMutableAttributedString()
+        var text: [NSAttributedString.Key: Any] = [.font: Theme.mono(12), .kern: 0.6]
         switch menuBar.marker {
         case .project:
             title.append(NSAttributedString(string: "■ ", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(11)]))
-        case .noProject, .away, .unknown:
-            break  // No marker: the hollow dashed dot is kept for Haiku guesses (ticket 11).
+        case .noProject, .away:
+            text[.foregroundColor] = Theme.steel  // No marker: the hollow dashed dot is kept for Haiku guesses (ticket 11).
+        case .unknown:
+            break
         }
-        var text: [NSAttributedString.Key: Any] = [.font: Theme.mono(12), .kern: 0.6]
-        if menuBar.marker == .noProject || menuBar.marker == .away { text[.foregroundColor] = Theme.steel }
         title.append(NSAttributedString(string: menuBar.title, attributes: text))
         statusItem.button?.attributedTitle = title
     }

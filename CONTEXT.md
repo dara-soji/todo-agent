@@ -60,7 +60,11 @@ The Task the user has accepted as what they are doing now, usually by accepting 
 _Avoid_: active task, current task
 
 **Signal**:
-One observable piece of evidence about what the user is doing (active app, window title, calendar event, screenshot).
+One observable piece of evidence about what the user is doing (active app, window title, browser URL, calendar event, idle time, git branch, screenshot).
+
+**Away**:
+When the user has given no keyboard or mouse input for a few minutes and no matching meeting is under way. Away time has no Project and is not work; it never counts as Drift.
+_Avoid_: idle (that is the Signal), inactive
 
 **Drift**:
 When Now has matched a different Project, or no Project, for longer than a short grace period while there is a Committed Task.

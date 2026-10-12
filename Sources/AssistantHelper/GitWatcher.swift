@@ -8,6 +8,8 @@ import Foundation
 final class GitWatcher {
     private var stream: FSEventStreamRef?
     private var repos: [String] = []
+    /// FSEvents reports resolved paths, so each repo's `.git` folder is matched by its real path.
+    private var gitDirs: [String: String] = [:]
     private let deliver: (Signal) -> Void
 
     init(delivering deliver: @escaping (Signal) -> Void) {
@@ -19,6 +21,8 @@ final class GitWatcher {
         let repos = repoPaths.filter { FileManager.default.fileExists(atPath: $0 + "/.git/HEAD") }
         guard repos != self.repos else { return }
         self.repos = repos
+        gitDirs = Dictionary(repos.map { (URL(fileURLWithPath: $0 + "/.git").resolvingSymlinksInPath().path, $0) },
+                             uniquingKeysWith: { first, _ in first })
         stopStream()
         repos.forEach(report)
         guard !repos.isEmpty else { return }
@@ -31,10 +35,10 @@ final class GitWatcher {
             let changed = (unsafeBitCast(paths, to: NSArray.self) as? [String]) ?? []
             MainActor.assumeIsolated { watcher.changed(changed.prefix(count)) }
         }
-        let gitDirs = repos.map { $0 + "/.git" } as CFArray
+        let watched = Array(gitDirs.keys) as CFArray
         let flags = UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents)
         guard let stream = FSEventStreamCreate(
-            nil, callback, &context, gitDirs, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0, flags)
+            nil, callback, &context, watched, FSEventStreamEventId(kFSEventStreamEventIdSinceNow), 1.0, flags)
         else { return }
         FSEventStreamSetDispatchQueue(stream, .main)
         FSEventStreamStart(stream)
@@ -42,8 +46,8 @@ final class GitWatcher {
     }
 
     private func changed(_ paths: ArraySlice<String>) {
-        let touched = repos.filter { repo in paths.contains { $0.hasPrefix(repo + "/.git/") } }
-        touched.forEach(report)
+        let touched = gitDirs.filter { gitDir, _ in paths.contains { $0.hasPrefix(gitDir + "/") } }.values
+        Set(touched).forEach(report)
     }
 
     private func report(_ repo: String) {

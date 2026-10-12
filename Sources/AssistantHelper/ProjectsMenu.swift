@@ -34,8 +34,7 @@ final class ProjectsMenu: NSObject {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Remove Matcher", action: nil, keyEquivalent: "").isEnabled = false
             for matcher in project.matchers {
-                let label = matcher.kind == .calendarKeyword ? "calendar: \(matcher.pattern)" : matcher.pattern
-            let remove = action(label, #selector(removeMatcher(_:)), (project.id, matcher))
+                let remove = action(MatcherText.format(matcher), #selector(removeMatcher(_:)), (project.id, matcher))
                 remove.indentationLevel = 1
                 menu.addItem(remove)
             }
@@ -58,7 +57,7 @@ final class ProjectsMenu: NSObject {
             ("Matchers, separated by commas: a repo path (~/code/x), a URL prefix (github.com/you/x) or a calendar keyword (calendar: standup)", ""),
         ]) else { return }
         let shortName = answers[1].isEmpty ? nil : answers[1]
-        attempt { try assistant.declareProject(name: answers[0], shortName: shortName, matchers: Self.matchers(answers[2])) }
+        attempt { try assistant.declareProject(name: answers[0], shortName: shortName, matchers: MatcherText.parse(answers[2])) }
     }
 
     @objc private func rename(_ sender: NSMenuItem) {
@@ -72,7 +71,7 @@ final class ProjectsMenu: NSObject {
         guard let project = sender.representedObject as? Project,
               let answers = ask("Add Matcher to \(project.name)", fields: [("Repo paths, URL prefixes or calendar keywords (calendar: standup), separated by commas", "")])
         else { return }
-        attempt { try assistant.addMatchers(Self.matchers(answers[0]), to: project.id) }
+        attempt { try assistant.addMatchers(MatcherText.parse(answers[0]), to: project.id) }
     }
 
     @objc private func removeMatcher(_ sender: NSMenuItem) {
@@ -91,18 +90,6 @@ final class ProjectsMenu: NSObject {
     }
 
     // MARK: Helpers
-
-    /// `calendar: x` is a calendar keyword, an entry starting with `~` or `/` is a repo path,
-    /// and anything else is a URL prefix.
-    private static func matchers(_ text: String) -> [Matcher] {
-        text.split(whereSeparator: { $0 == "," || $0.isNewline })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .map { entry in
-                if entry.lowercased().hasPrefix("calendar:") { return .calendarKeyword(String(entry.dropFirst(9))) }
-                return entry.hasPrefix("~") || entry.hasPrefix("/") ? .repoPath(entry) : .urlPrefix(entry)
-            }
-    }
 
     private func attempt(_ change: () throws -> Void) {
         do {

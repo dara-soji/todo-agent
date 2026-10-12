@@ -68,6 +68,40 @@ import AssistantCore
         #expect(assistant.now.project == nil)
     }
 
+    @Test func sittingStillInAMatchingMeetingIsTheMeetingNotAway() throws {
+        let assistant = makeAssistant()
+        let dotnet = try assistant.declareProject(name: "Learning .NET", matchers: [.calendarKeyword("dotnet")])
+        assistant.receive(.activeWindow(app: zoom, windowTitle: "Zoom Meeting"))
+        assistant.receive(.calendar(events: [event("Dotnet study group")]))
+
+        assistant.receive(.userIdle(seconds: 20 * 60))
+
+        #expect(!assistant.now.isAway)
+        #expect(assistant.now.project == dotnet.id)
+    }
+
+    @Test func idleWithNoMatchingMeetingIsStillAway() throws {
+        let assistant = makeAssistant()
+        try assistant.declareProject(name: "Learning .NET", matchers: [.calendarKeyword("dotnet")])
+        assistant.receive(.activeWindow(app: zoom, windowTitle: "Zoom Meeting"))
+        assistant.receive(.calendar(events: [event("Lunch")]))
+
+        assistant.receive(.userIdle(seconds: 20 * 60))
+
+        #expect(assistant.now.isAway)
+    }
+
+    @Test func aMeetingCanSetNowBeforeAnyWindowIsKnown() throws {
+        let assistant = makeAssistant()
+        let dotnet = try assistant.declareProject(name: "Learning .NET", matchers: [.calendarKeyword("dotnet")])
+
+        assistant.receive(.calendar(events: [event("Dotnet study group")]))
+
+        #expect(assistant.now.project == dotnet.id)
+        #expect(assistant.menuBar.title == "LEARNING .NET")
+        #expect(assistant.menuBar.window == nil)
+    }
+
     @Test(arguments: ["", " ", "a"])
     func keywordsTooShortToMeanAnythingAreRejected(keyword: String) {
         let assistant = makeAssistant()
