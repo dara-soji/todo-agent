@@ -23,6 +23,8 @@ public final class Assistant {
     static let awayAfter: TimeInterval = 5 * 60
 
     let clock: WallClock
+    /// For time of day and dates as Dara reads them.
+    let calendar: Calendar
     private let store: AssistantStore
     private let guardrail = Guardrail()
     let fitting: MatcherFitting
@@ -33,7 +35,7 @@ public final class Assistant {
     public private(set) var operationLog: [LogEntry]
     /// When each Project last matched, to break ties between equally specific Matchers.
     private var lastMatched: [Project.ID: Date] = [:]
-    private var calendarEvents: [CalendarEvent] = []
+    private(set) var calendarEvents: [CalendarEvent] = []
     /// No input for `awayAfter`. Away unless a matching meeting is under way.
     private var isIdle = false
     /// Checked-out branch by full repo path.
@@ -41,9 +43,10 @@ public final class Assistant {
 
     public private(set) var now: Now = .unknown
 
-    public init(clock: WallClock, store: AssistantStore, homeDirectory: String) throws {
+    public init(clock: WallClock, store: AssistantStore, homeDirectory: String, calendar: Calendar = .current) throws {
         let snapshot = try store.load()
         self.clock = clock
+        self.calendar = calendar
         self.store = store
         self.fitting = MatcherFitting(homeDirectory: homeDirectory)
         self.projectsByID = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })

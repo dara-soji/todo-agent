@@ -47,6 +47,51 @@ public struct Task: Identifiable, Equatable, Sendable, Codable {
     public var resumeAfterInterruption: Bool
     /// When it was moved to the Deleted list; nil for a Task in play.
     public var deletedAt: Date?
+    /// Skipped as Next: it sits out until then.
+    public var skippedUntil: Date?
+    /// Skips since Dara last decided about it. The third asks what to do.
+    public var skipCount: Int
+
+    init(
+        id: ID, title: String, source: Source, backLink: String?, status: Status, created: Date, deadline: Date?,
+        project: Project.ID?, effort: Effort?, kind: Kind?, resumeAfterInterruption: Bool = false,
+        deletedAt: Date? = nil, skippedUntil: Date? = nil, skipCount: Int = 0
+    ) {
+        self.id = id
+        self.title = title
+        self.source = source
+        self.backLink = backLink
+        self.status = status
+        self.created = created
+        self.deadline = deadline
+        self.project = project
+        self.effort = effort
+        self.kind = kind
+        self.resumeAfterInterruption = resumeAfterInterruption
+        self.deletedAt = deletedAt
+        self.skippedUntil = skippedUntil
+        self.skipCount = skipCount
+    }
+
+    /// Tasks stored before a field existed still load, with that field's default.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(ID.self, forKey: .id),
+            title: try c.decode(String.self, forKey: .title),
+            source: try c.decode(Source.self, forKey: .source),
+            backLink: try c.decodeIfPresent(String.self, forKey: .backLink),
+            status: try c.decode(Status.self, forKey: .status),
+            created: try c.decode(Date.self, forKey: .created),
+            deadline: try c.decodeIfPresent(Date.self, forKey: .deadline),
+            project: try c.decodeIfPresent(Project.ID.self, forKey: .project),
+            effort: try c.decodeIfPresent(Effort.self, forKey: .effort),
+            kind: try c.decodeIfPresent(Kind.self, forKey: .kind),
+            resumeAfterInterruption: try c.decodeIfPresent(Bool.self, forKey: .resumeAfterInterruption) ?? false,
+            deletedAt: try c.decodeIfPresent(Date.self, forKey: .deletedAt),
+            skippedUntil: try c.decodeIfPresent(Date.self, forKey: .skippedUntil),
+            skipCount: try c.decodeIfPresent(Int.self, forKey: .skipCount) ?? 0)
+    }
 }
 
 /// What Dara or a Source provides for a new Task.

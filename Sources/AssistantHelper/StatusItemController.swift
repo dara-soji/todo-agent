@@ -43,6 +43,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             break
         }
         title.append(NSAttributedString(string: menuBar.title, attributes: text))
+        if menuBar.promptsWaiting {
+            title.append(NSAttributedString(string: " ●", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(9)]))
+        }
         statusItem.button?.attributedTitle = title
     }
 
@@ -50,12 +53,24 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        let prompts = tasksMenu.promptItems()
+        if !prompts.isEmpty {
+            prompts.forEach(menu.addItem)
+            menu.addItem(.separator())
+        }
+
         menu.addItem(header("Now"))
         if let committed = menuBar.committedTaskTitle { menu.addItem(detail(committed)) }
         menu.addItem(metadata(menuBar.nowDetail))
         if let evidence = menuBar.evidence { menu.addItem(metadata(evidence)) }
         if let window = menuBar.window { menu.addItem(metadata(window)) }
         if let markDone = tasksMenu.markDoneItem() { menu.addItem(markDone) }
+
+        menu.addItem(.separator())
+        menu.addItem(header("Next"))
+        menu.addItem(nextTitle(menuBar.nextTitle))
+        if let reason = menuBar.nextReason { menu.addItem(metadata(reason)) }
+        tasksMenu.nextItems().forEach(menu.addItem)
 
         menu.addItem(.separator())
         let addTask = action("Add task…", #selector(addTask))
@@ -98,6 +113,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func detail(_ text: String) -> NSMenuItem {
         let item = NSMenuItem()
         item.attributedTitle = NSAttributedString(string: text, attributes: [.font: Theme.display(13)])
+        item.isEnabled = false
+        return item
+    }
+
+    private func nextTitle(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: Theme.display(13), .foregroundColor: Theme.accent,
+        ])
         item.isEnabled = false
         return item
     }

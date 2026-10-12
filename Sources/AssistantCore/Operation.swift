@@ -22,6 +22,7 @@ public enum Confirmation: String, Sendable, Codable {
 /// Every kind of Operation the assistant performs on its own data.
 public enum OperationKind: String, Sendable, Codable {
     case addTask, editTask, commitTask, completeTask, snoozeTask, wakeTask, dropTask, deleteTask, restoreTask
+    case skipTask, keepTask
     case declareProject, editProject, archiveProject, restoreProject
     case undo
 }

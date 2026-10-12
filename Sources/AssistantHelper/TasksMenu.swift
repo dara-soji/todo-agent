@@ -17,6 +17,28 @@ final class TasksMenu: NSObject {
         return menuItem("Mark done", #selector(complete(_:)), committed.id)
     }
 
+    /// Next: its title in amber and reason come from the MenuBar; these are its controls.
+    func nextItems() -> [NSMenuItem] {
+        guard let id = assistant.next.task else { return [] }
+        return [menuItem("Start", #selector(start(_:)), id), menuItem("Skip", #selector(skip(_:)), id), snoozeItem(id)]
+    }
+
+    /// Prompts waiting for a decision, at the top of the dropdown.
+    func promptItems() -> [NSMenuItem] {
+        assistant.prompts.compactMap { prompt in
+            switch prompt {
+            case let .skippedThreeTimes(id):
+                guard let task = assistant.task(id) else { return nil }
+                let item = NSMenuItem(title: "Skipped 3×: \(task.title)", action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                item.submenu?.addItem(menuItem("Snooze till tomorrow", #selector(snoozeTomorrow(_:)), id))
+                item.submenu?.addItem(menuItem("Drop it", #selector(drop(_:)), id))
+                item.submenu?.addItem(menuItem("Keep it", #selector(keep(_:)), id))
+                return item
+            }
+        }
+    }
+
     func tasksItem() -> NSMenuItem {
         let root = NSMenuItem(title: "Tasks", action: nil, keyEquivalent: "")
         let menu = NSMenu()
@@ -51,17 +73,21 @@ final class TasksMenu: NSObject {
         let menu = NSMenu()
         if task.status != .committed { menu.addItem(menuItem("Start", #selector(start(_:)), task.id)) }
         menu.addItem(menuItem("Mark done", #selector(complete(_:)), task.id))
-        let snooze = NSMenuItem(title: "Snooze", action: nil, keyEquivalent: "")
-        snooze.submenu = NSMenu()
-        snooze.submenu?.addItem(menuItem("1 hour", #selector(snoozeHour(_:)), task.id))
-        snooze.submenu?.addItem(menuItem("Till tomorrow", #selector(snoozeTomorrow(_:)), task.id))
-        snooze.submenu?.addItem(menuItem("Waiting on someone…", #selector(snoozeWaiting(_:)), task.id))
-        menu.addItem(snooze)
+        menu.addItem(snoozeItem(task.id))
         menu.addItem(menuItem("Drop", #selector(drop(_:)), task.id))
         menu.addItem(.separator())
         menu.addItem(menuItem("Delete", #selector(delete(_:)), task.id))
         item.submenu = menu
         return item
+    }
+
+    private func snoozeItem(_ id: Task.ID) -> NSMenuItem {
+        let snooze = NSMenuItem(title: "Snooze", action: nil, keyEquivalent: "")
+        snooze.submenu = NSMenu()
+        snooze.submenu?.addItem(menuItem("1 hour", #selector(snoozeHour(_:)), id))
+        snooze.submenu?.addItem(menuItem("Till tomorrow", #selector(snoozeTomorrow(_:)), id))
+        snooze.submenu?.addItem(menuItem("Waiting on someone…", #selector(snoozeWaiting(_:)), id))
+        return snooze
     }
 
     private static func label(_ task: Task) -> String {
@@ -80,16 +106,15 @@ final class TasksMenu: NSObject {
     @objc private func drop(_ sender: NSMenuItem) { attempt(sender) { try assistant.dropTask($0) } }
     @objc private func delete(_ sender: NSMenuItem) { attempt(sender) { try assistant.deleteTask($0) } }
     @objc private func restore(_ sender: NSMenuItem) { attempt(sender) { try assistant.restoreTask($0) } }
+    @objc private func skip(_ sender: NSMenuItem) { attempt(sender) { try assistant.skipTask($0) } }
+    @objc private func keep(_ sender: NSMenuItem) { attempt(sender) { try assistant.keepTask($0) } }
 
     @objc private func snoozeHour(_ sender: NSMenuItem) {
         attempt(sender) { try assistant.snoozeTask($0, until: Date().addingTimeInterval(60 * 60)) }
     }
 
     @objc private func snoozeTomorrow(_ sender: NSMenuItem) {
-        let calendar = Calendar.current
-        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))!
-        let nineAM = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!
-        attempt(sender) { try assistant.snoozeTask($0, until: nineAM) }
+        attempt(sender) { try assistant.snoozeTillTomorrow($0) }
     }
 
     @objc private func snoozeWaiting(_ sender: NSMenuItem) {
