@@ -4,30 +4,31 @@ import Foundation
 public final class Assistant {
     public enum Failure: Error, Equatable {
         case unknownProject(Project.ID)
+        case emptyName
     }
 
     private let clock: WallClock
     private let store: ProjectStore
-    private let rules: MatcherRules
+    private let fitting: MatcherFitting
     private var projectsByID: [Project.ID: Project]
     /// When each Project last matched, to break ties between equally specific Matchers.
     private var lastMatched: [Project.ID: Date] = [:]
 
     public private(set) var now: Now = .unknown
 
-    public init(clock: WallClock, projects: ProjectStore, homeDirectory: String) {
+    public init(clock: WallClock, projects: ProjectStore, homeDirectory: String) throws {
         self.clock = clock
         self.store = projects
-        self.rules = MatcherRules(homeDirectory: homeDirectory)
-        self.projectsByID = Dictionary(uniqueKeysWithValues: projects.loadProjects().map { ($0.id, $0) })
+        self.fitting = MatcherFitting(homeDirectory: homeDirectory)
+        self.projectsByID = Dictionary(uniqueKeysWithValues: try projects.loadProjects().map { ($0.id, $0) })
     }
 
     public func receive(_ signal: Signal) {
         switch signal {
         case let .activeWindow(app, title, url):
             let window = ActiveWindow(app: app, title: title, url: url)
-            let since = window == now.window ? now.since : clock.now
-            resolve(window, since: since)
+            let since = window == now.window ? now.since ?? clock.now : clock.now
+            resolve(Now.Visit(window: window, since: since))
         }
     }
 
@@ -35,7 +36,7 @@ public final class Assistant {
 
     /// Every Project, active and archived, by name.
     public var projects: [Project] {
-        projectsByID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        projectsByID.values.sorted(by: Self.byName)
     }
 
     public func project(_ id: Project.ID) -> Project? {
@@ -44,12 +45,15 @@ public final class Assistant {
 
     @discardableResult
     public func declareProject(name: String, shortName: String? = nil, matchers: [Matcher]) throws -> Project {
-        let project = Project(name: name, shortName: shortName, matchers: try matchers.map(rules.normalised))
-        commit(project)
+        let project = Project(
+            name: try Self.validName(name), shortName: shortName,
+            matchers: try matchers.map(fitting.normalised))
+        try commit(project)
         return project
     }
 
     public func renameProject(_ id: Project.ID, name: String, shortName: String? = nil) throws {
+        let name = try Self.validName(name)
         try change(id) {
             $0.name = name
             $0.shortName = shortName ?? name
@@ -57,12 +61,21 @@ public final class Assistant {
     }
 
     public func addMatcher(_ matcher: Matcher, to id: Project.ID) throws {
-        let matcher = try rules.normalised(matcher)
-        try change(id) { if !$0.matchers.contains(matcher) { $0.matchers.append(matcher) } }
+        try addMatchers([matcher], to: id)
+    }
+
+    /// Adds every Matcher, or none if any is invalid.
+    public func addMatchers(_ matchers: [Matcher], to id: Project.ID) throws {
+        let matchers = try matchers.map(fitting.normalised)
+        try change(id) { project in
+            for matcher in matchers where !project.matchers.contains(matcher) {
+                project.matchers.append(matcher)
+            }
+        }
     }
 
     public func removeMatcher(_ matcher: Matcher, from id: Project.ID) throws {
-        let matcher = (try? rules.normalised(matcher)) ?? matcher
+        let matcher = (try? fitting.normalised(matcher)) ?? matcher
         try change(id) { $0.matchers.removeAll { $0 == matcher } }
     }
 
@@ -78,33 +91,46 @@ public final class Assistant {
     private func change(_ id: Project.ID, _ edit: (inout Project) -> Void) throws {
         guard var project = projectsByID[id] else { throw Failure.unknownProject(id) }
         edit(&project)
-        commit(project)
+        try commit(project)
     }
 
-    private func commit(_ project: Project) {
+    /// Stores the Project first, so a failed save leaves everything as it was.
+    private func commit(_ project: Project) throws {
+        try store.save(project)
         projectsByID[project.id] = project
-        store.save(project)
-        if let window = now.window { resolve(window, since: now.since) }
+        if let visit = now.visit { resolve(visit) }
+    }
+
+    private static func validName(_ name: String) throws -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw Failure.emptyName }
+        return name
+    }
+
+    private static func byName(_ a: Project, _ b: Project) -> Bool {
+        a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
     }
 
     // MARK: Resolving Now
 
-    private func resolve(_ window: ActiveWindow, since: Date?) {
-        let match = bestMatch(for: window)
+    private func resolve(_ visit: Now.Visit) {
+        let match = bestMatch(for: visit.window)
         if let match { lastMatched[match.project] = clock.now }
-        now = Now(window: window, since: since, project: match?.project, evidence: match?.matcher)
+        now = Now(visit: visit, match: match)
     }
 
-    /// The most specific fitting Matcher wins; equally specific ones go to the most recently matched Project.
-    private func bestMatch(for window: ActiveWindow) -> (project: Project.ID, matcher: Matcher)? {
-        let candidates = projectsByID.values
+    /// The most specific fitting Matcher wins; equally specific ones go to the most recently
+    /// matched Project, then to the first by name.
+    private func bestMatch(for window: ActiveWindow) -> Now.Match? {
+        let candidates = projects
             .filter { $0.status == .active }
             .flatMap { project in
-                project.matchers.filter { rules.fits($0, window) }.map { (project: project.id, matcher: $0) }
+                project.matchers.filter { fitting.fits($0, window) }.map { Now.Match(project: project.id, evidence: $0) }
             }
+        // `max` keeps the first of equal elements, and candidates are in name order.
         return candidates.max { a, b in
-            if a.matcher.specificity != b.matcher.specificity {
-                return a.matcher.specificity < b.matcher.specificity
+            if a.evidence.specificity != b.evidence.specificity {
+                return a.evidence.specificity < b.evidence.specificity
             }
             return (lastMatched[a.project] ?? .distantPast) < (lastMatched[b.project] ?? .distantPast)
         }

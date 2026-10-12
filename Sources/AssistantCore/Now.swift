@@ -15,15 +15,28 @@ public struct ActiveWindow: Equatable, Sendable {
 
 /// The single piece of work Dara is doing at this moment, resolved to a Project where a Matcher fits.
 public struct Now: Equatable, Sendable {
-    /// Before any Signal has arrived.
-    public static let unknown = Now(window: nil, since: nil, project: nil, evidence: nil)
+    /// A window and when Dara arrived on it.
+    public struct Visit: Equatable, Sendable {
+        public let window: ActiveWindow
+        public let since: Date
+    }
 
-    /// The window Dara is in; nil before the first Signal.
-    public let window: ActiveWindow?
-    /// When Dara arrived on this window.
-    public let since: Date?
-    /// The Project the window matched; nil means No Project.
-    public let project: Project.ID?
-    /// The Matcher that put Now on `project`.
-    public let evidence: Matcher?
+    /// A Project and the Matcher that put Now on it.
+    public struct Match: Equatable, Sendable {
+        public let project: Project.ID
+        public let evidence: Matcher
+    }
+
+    /// Before any Signal has arrived.
+    public static let unknown = Now(visit: nil, match: nil)
+
+    /// Nil before the first Signal.
+    public let visit: Visit?
+    /// Nil means No Project.
+    public let match: Match?
+
+    public var window: ActiveWindow? { visit?.window }
+    public var since: Date? { visit?.since }
+    public var project: Project.ID? { match?.project }
+    public var evidence: Matcher? { match?.evidence }
 }

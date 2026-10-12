@@ -32,12 +32,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         switch menuBar.marker {
         case .project:
             title.append(NSAttributedString(string: "■ ", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(11)]))
-        case .noProject:
-            title.append(NSAttributedString(string: "□ ", attributes: [.foregroundColor: Theme.steel, .font: Theme.mono(11)]))
-        case .unknown:
-            break
+        case .noProject, .unknown:
+            break  // No marker: the hollow dashed dot is kept for Haiku guesses (ticket 11).
         }
-        title.append(NSAttributedString(string: menuBar.title, attributes: [.font: Theme.mono(12), .kern: 0.6]))
+        var text: [NSAttributedString.Key: Any] = [.font: Theme.mono(12), .kern: 0.6]
+        if menuBar.marker == .noProject { text[.foregroundColor] = Theme.steel }
+        title.append(NSAttributedString(string: menuBar.title, attributes: text))
         statusItem.button?.attributedTitle = title
     }
 

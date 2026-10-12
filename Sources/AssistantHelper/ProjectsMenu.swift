@@ -5,11 +5,11 @@ import AssistantCore
 @MainActor
 final class ProjectsMenu: NSObject {
     private let assistant: Assistant
-    private let changed: () -> Void
+    /// Called after every attempted change, so the menu bar can redraw.
+    var onChange: () -> Void = {}
 
-    init(assistant: Assistant, changed: @escaping () -> Void) {
+    init(assistant: Assistant) {
         self.assistant = assistant
-        self.changed = changed
     }
 
     func item() -> NSMenuItem {
@@ -54,7 +54,7 @@ final class ProjectsMenu: NSObject {
     @objc private func newProject() {
         guard let answers = ask("New Project", fields: [
             ("Name", ""), ("Short name (optional)", ""),
-            ("Matchers, one per line: a repo path (~/code/x) or a URL prefix (github.com/you/x)", ""),
+            ("Matchers, separated by commas: a repo path (~/code/x) or a URL prefix (github.com/you/x)", ""),
         ]) else { return }
         let shortName = answers[1].isEmpty ? nil : answers[1]
         attempt { try assistant.declareProject(name: answers[0], shortName: shortName, matchers: Self.matchers(answers[2])) }
@@ -69,9 +69,9 @@ final class ProjectsMenu: NSObject {
 
     @objc private func addMatcher(_ sender: NSMenuItem) {
         guard let project = sender.representedObject as? Project,
-              let answers = ask("Add Matcher to \(project.name)", fields: [("Repo path or URL prefix", "")])
+              let answers = ask("Add Matcher to \(project.name)", fields: [("Repo paths or URL prefixes, separated by commas", "")])
         else { return }
-        attempt { for matcher in Self.matchers(answers[0]) { try assistant.addMatcher(matcher, to: project.id) } }
+        attempt { try assistant.addMatchers(Self.matchers(answers[0]), to: project.id) }
     }
 
     @objc private func removeMatcher(_ sender: NSMenuItem) {
@@ -91,9 +91,9 @@ final class ProjectsMenu: NSObject {
 
     // MARK: Helpers
 
-    /// A line starting with `~` or `/` is a repo path; anything else is a URL prefix.
+    /// An entry starting with `~` or `/` is a repo path; anything else is a URL prefix.
     private static func matchers(_ text: String) -> [Matcher] {
-        text.split(whereSeparator: \.isNewline)
+        text.split(whereSeparator: { $0 == "," || $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .map { $0.hasPrefix("~") || $0.hasPrefix("/") ? .repoPath($0) : .urlPrefix($0) }
@@ -108,10 +108,12 @@ final class ProjectsMenu: NSObject {
             case let .relativePath(path): "“\(path)” isn't a full path. Start it with ~/ or /."
             }
             alert(message)
+        } catch Assistant.Failure.emptyName {
+            alert("A Project needs a name.")
         } catch {
             alert("\(error)")
         }
-        changed()
+        onChange()
     }
 
     private func alert(_ message: String) {
@@ -137,11 +139,6 @@ final class ProjectsMenu: NSObject {
             label.preferredMaxLayoutWidth = 320
             let input = NSTextField(string: field.value)
             input.widthAnchor.constraint(equalToConstant: 320).isActive = true
-            if field.label.hasPrefix("Matchers") {
-                input.heightAnchor.constraint(equalToConstant: 60).isActive = true
-                input.usesSingleLineMode = false
-                input.cell?.wraps = true
-            }
             stack.addArrangedSubview(label)
             stack.addArrangedSubview(input)
             inputs.append(input)

@@ -28,7 +28,8 @@ public struct Project: Identifiable, Equatable, Sendable {
 }
 
 /// Persistence port for Projects. The helper's SQLite store conforms; tests use an in-memory fake.
+/// A save that fails changes nothing: the Assistant applies a change only once it is stored.
 public protocol ProjectStore {
-    func loadProjects() -> [Project]
-    func save(_ project: Project)
+    func loadProjects() throws -> [Project]
+    func save(_ project: Project) throws
 }

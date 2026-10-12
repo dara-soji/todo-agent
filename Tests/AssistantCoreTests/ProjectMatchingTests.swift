@@ -10,7 +10,7 @@ import AssistantCore
     let safari = App(bundleID: "com.apple.Safari", name: "Safari")
 
     func makeAssistant() -> Assistant {
-        Assistant(clock: clock, projects: store, homeDirectory: "/Users/dara")
+        try! Assistant(clock: clock, projects: store, homeDirectory: "/Users/dara")
     }
 
     func browse(_ assistant: Assistant, _ url: String) {
@@ -61,6 +61,15 @@ import AssistantCore
         }
     }
 
+    @Test func aRepoPathWithSpacesMatches() throws {
+        let assistant = makeAssistant()
+        let notes = try assistant.declareProject(name: "Course notes", matchers: [.repoPath("~/Documents/Course Notes")])
+
+        assistant.receive(.activeWindow(app: code, windowTitle: "week1.md — /Users/dara/Documents/Course Notes/week1 [main]"))
+
+        #expect(assistant.now.project == notes.id)
+    }
+
     // MARK: URL-prefix Matchers
 
     @Test func urlPrefixMatchesIgnoringSchemeAndWWW() throws {
@@ -84,7 +93,27 @@ import AssistantCore
         #expect(assistant.now.project == nil)
     }
 
-    @Test(arguments: ["github.com", "https://github.com/", "learn.microsoft.com"])
+    @Test func aURLPrefixMatchesWholeSegmentsOnly() throws {
+        let assistant = makeAssistant()
+        try assistant.declareProject(name: "todo", matchers: [.urlPrefix("github.com/dara-soji/todo")])
+
+        browse(assistant, "https://github.com/dara-soji/todo-agent")
+
+        #expect(assistant.now.project == nil)
+    }
+
+    @Test func aURLPrefixKeepsThePortAndReadsDecodedPaths() throws {
+        let assistant = makeAssistant()
+        let local = try assistant.declareProject(name: "Local app", matchers: [.urlPrefix("localhost:3000/course notes")])
+
+        browse(assistant, "http://localhost:3000/course%20notes/week1")
+        #expect(assistant.now.project == local.id)
+
+        browse(assistant, "http://localhost:4000/course%20notes/week1")
+        #expect(assistant.now.project == nil)
+    }
+
+    @Test(arguments: ["github.com", "https://github.com/", "learn.microsoft.com", "github.com/*", "github.com/*/*/"])
     func bareDomainURLPrefixesAreRejected(prefix: String) {
         let assistant = makeAssistant()
         #expect(throws: Matcher.Invalid.self) {
@@ -103,6 +132,37 @@ import AssistantCore
         assistant.receive(.activeWindow(app: code, windowTitle: "Assistant.swift — ~/code/todo-agent"))
 
         #expect(assistant.now.project == todo.id)
+    }
+
+    @Test func aWildcardSegmentIsLessSpecificThanALiteralOne() throws {
+        let assistant = makeAssistant()
+        let english = try assistant.declareProject(name: "English docs", matchers: [.urlPrefix("learn.microsoft.com/en-us/training")])
+        try assistant.declareProject(name: "Learning .NET", matchers: [.urlPrefix("learn.microsoft.com/*/training")])
+
+        browse(assistant, "https://learn.microsoft.com/en-us/training/modules/csharp-call-methods/")
+
+        // `en-us` is more specific than `*` in the same place.
+        #expect(assistant.now.project == english.id)
+    }
+
+    @Test func aDeeperPathIsMoreSpecificThanALongerName() throws {
+        let assistant = makeAssistant()
+        let nested = try assistant.declareProject(name: "Nested", matchers: [.repoPath("~/c/a/b")])
+        try assistant.declareProject(name: "Long name", matchers: [.repoPath("~/c/a-very-long-folder-name")])
+
+        assistant.receive(.activeWindow(app: code, windowTitle: "~/c/a/b ~/c/a-very-long-folder-name"))
+
+        #expect(assistant.now.project == nested.id)
+    }
+
+    @Test func aTieNeitherProjectHasMatchedBeforeGoesToTheFirstByName() throws {
+        let assistant = makeAssistant()
+        let alpha = try assistant.declareProject(name: "Alpha", matchers: [.repoPath("~/code/shared")])
+        try assistant.declareProject(name: "Beta", matchers: [.repoPath("~/code/shared")])
+
+        assistant.receive(.activeWindow(app: code, windowTitle: "~/code/shared"))
+
+        #expect(assistant.now.project == alpha.id)
     }
 
     @Test func equallySpecificMatchersGoToTheMostRecentlyMatchedProject() throws {
@@ -158,6 +218,44 @@ import AssistantCore
 
         #expect(assistant.project(todo.id)?.name == "Personal assistant")
         #expect(assistant.project(todo.id)?.shortName == "PA")
+    }
+
+    @Test func aProjectNeedsAName() throws {
+        let assistant = makeAssistant()
+        #expect(throws: Assistant.Failure.emptyName) {
+            try assistant.declareProject(name: "  ", matchers: [])
+        }
+        let todo = try assistant.declareProject(name: "todo-agent", matchers: [])
+        #expect(throws: Assistant.Failure.emptyName) {
+            try assistant.renameProject(todo.id, name: "")
+        }
+    }
+
+    @Test func addingSeveralMatchersAddsAllOrNone() throws {
+        let assistant = makeAssistant()
+        let todo = try assistant.declareProject(name: "todo-agent", matchers: [])
+
+        #expect(throws: Matcher.Invalid.self) {
+            try assistant.addMatchers([.repoPath("~/code/todo-agent"), .urlPrefix("github.com")], to: todo.id)
+        }
+
+        #expect(assistant.project(todo.id)?.matchers == [])
+    }
+
+    @Test func aChangeThatCannotBeSavedIsNotApplied() throws {
+        let assistant = makeAssistant()
+        let todo = try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
+        assistant.receive(.activeWindow(app: code, windowTitle: "~/code/todo-agent"))
+        store.failSaves = true
+
+        #expect(throws: InMemoryProjectStore.SaveFailed.self) { try assistant.archiveProject(todo.id) }
+        #expect(throws: InMemoryProjectStore.SaveFailed.self) {
+            try assistant.declareProject(name: "Other", matchers: [])
+        }
+
+        #expect(assistant.project(todo.id)?.status == .active)
+        #expect(assistant.now.project == todo.id)
+        #expect(assistant.projects.count == 1)
     }
 
     @Test func editingAnUnknownProjectFails() {

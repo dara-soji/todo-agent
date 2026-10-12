@@ -54,16 +54,6 @@ public struct MenuBar: Equatable, Sendable {
     }
 }
 
-extension Matcher {
-    /// The Matcher as Dara wrote it, for showing as evidence.
-    public var pattern: String {
-        switch self {
-        case let .repoPath(path): path
-        case let .urlPrefix(prefix): prefix
-        }
-    }
-}
-
 extension Assistant {
     public var menuBar: MenuBar { MenuBar(now, project: now.project.flatMap(project)) }
 }

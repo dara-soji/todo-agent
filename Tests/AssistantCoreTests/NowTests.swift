@@ -6,7 +6,7 @@ import AssistantCore
     let clock = FakeClock()
 
     func makeAssistant() -> Assistant {
-        Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+        try! Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
     }
 
     @Test func nowIsUnknownBeforeAnySignal() {

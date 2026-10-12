@@ -44,14 +44,14 @@ public final class SQLiteStore {
         guard sqlite3_open(url.path, &db) == SQLITE_OK else {
             throw Failure.sqlite(String(cString: sqlite3_errmsg(db)))
         }
-        try execute("PRAGMA journal_mode = WAL;")
-        try execute("PRAGMA foreign_keys = ON;")
+        try run("PRAGMA journal_mode = WAL;")
+        try run("PRAGMA foreign_keys = ON;")
         try migrate()
     }
 
     /// Each schema version only adds; running it again is harmless.
     private func migrate() throws {
-        try execute("""
+        try run("""
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
@@ -79,8 +79,8 @@ public final class SQLiteStore {
         }
     }
 
+    /// One statement with `?` placeholders bound to `values`.
     private func execute(_ sql: String, _ values: String...) throws {
-        guard !values.isEmpty else { return try executeScript(sql) }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError() }
         defer { sqlite3_finalize(statement) }
@@ -95,9 +95,12 @@ public final class SQLiteStore {
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError() }
         defer { sqlite3_finalize(statement) }
         var result: [[String]] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var step = sqlite3_step(statement)
+        while step == SQLITE_ROW {
             result.append((0..<columns).map { String(cString: sqlite3_column_text(statement, $0)) })
+            step = sqlite3_step(statement)
         }
+        guard step == SQLITE_DONE else { throw lastError() }
         return result
     }
 
@@ -108,7 +111,8 @@ public final class SQLiteStore {
     // SQLITE_TRANSIENT: SQLite copies the bound text before the Swift string goes away.
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    private func executeScript(_ sql: String) throws {
+    /// Fixed SQL with no parameters, possibly several statements.
+    private func run(_ sql: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {
             let message = error.map { String(cString: $0) } ?? "unknown error"
@@ -119,45 +123,38 @@ public final class SQLiteStore {
 }
 
 extension SQLiteStore: ProjectStore {
-    public func loadProjects() -> [Project] {
-        do {
-            let matchers = try rows("SELECT project_id, kind, pattern FROM matchers ORDER BY project_id, position;", columns: 3)
-            let byProject = Dictionary(grouping: matchers, by: { $0[0] })
-            return try rows("SELECT id, name, short_name, status FROM projects;", columns: 4).compactMap { row in
-                guard let uuid = UUID(uuidString: row[0]), let status = Project.Status(rawValue: row[3]) else { return nil }
-                let matchers: [Matcher] = (byProject[row[0]] ?? []).compactMap { m in
-                    switch m[1] {
-                    case "repoPath": .repoPath(m[2])
-                    case "urlPrefix": .urlPrefix(m[2])
-                    default: nil
-                    }
-                }
-                return Project(id: Project.ID(uuid), name: row[1], shortName: row[2], status: status, matchers: matchers)
+    public func loadProjects() throws -> [Project] {
+        let matchers = try rows("SELECT project_id, kind, pattern FROM matchers ORDER BY project_id, position;", columns: 3)
+        let byProject = Dictionary(grouping: matchers, by: { $0[0] })
+        return try rows("SELECT id, name, short_name, status FROM projects;", columns: 4).map { row in
+            guard let uuid = UUID(uuidString: row[0]), let status = Project.Status(rawValue: row[3]) else {
+                throw Failure.sqlite("unreadable Project row \(row[0])")
             }
-        } catch {
-            NSLog("TodoAgent: couldn't load Projects: \(error)")
-            return []
+            let matchers = try (byProject[row[0]] ?? []).map { m in
+                guard let kind = Matcher.Kind(rawValue: m[1]) else { throw Failure.sqlite("unknown Matcher kind \(m[1])") }
+                return Matcher(kind: kind, pattern: m[2])
+            }
+            return Project(id: Project.ID(uuid), name: row[1], shortName: row[2], status: status, matchers: matchers)
         }
     }
 
-    public func save(_ project: Project) {
+    public func save(_ project: Project) throws {
         let id = project.id.rawValue.uuidString
+        try run("BEGIN IMMEDIATE;")
         do {
-            try execute("BEGIN IMMEDIATE;")
             try execute("""
                 INSERT INTO projects (id, name, short_name, status) VALUES (?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name, status = excluded.status;
                 """, id, project.name, project.shortName, project.status.rawValue)
             try execute("DELETE FROM matchers WHERE project_id = ?;", id)
             for (position, matcher) in project.matchers.enumerated() {
-                let kind = switch matcher { case .repoPath: "repoPath"; case .urlPrefix: "urlPrefix" }
                 try execute("INSERT INTO matchers (project_id, position, kind, pattern) VALUES (?, ?, ?, ?);",
-                            id, String(position), kind, matcher.pattern)
+                            id, String(position), matcher.kind.rawValue, matcher.pattern)
             }
-            try execute("COMMIT;")
+            try run("COMMIT;")
         } catch {
-            try? execute("ROLLBACK;")
-            NSLog("TodoAgent: couldn't save Project \(project.name): \(error)")
+            try? run("ROLLBACK;")
+            throw error
         }
     }
 }
