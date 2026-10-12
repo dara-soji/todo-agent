@@ -7,6 +7,8 @@ public struct MenuBar: Equatable, Sendable {
         case project
         /// Now matched no Project.
         case noProject
+        /// Dara is idle long enough to be away.
+        case away
     }
 
     /// The menu-bar item's text.
@@ -22,8 +24,8 @@ public struct MenuBar: Equatable, Sendable {
     /// Longest menu-bar title, ellipsis included.
     static let titleLimit = 15
 
-    init(_ now: Now, project: Project?) {
-        guard let active = now.window else {
+    init(_ now: Now, project: Project?, branch: String?) {
+        guard now.window != nil || now.match != nil else {
             title = "—"
             marker = .unknown
             nowDetail = "Waiting for the first Signal"
@@ -31,16 +33,20 @@ public struct MenuBar: Equatable, Sendable {
             window = nil
             return
         }
-        if let title = active.title, !title.isEmpty {
-            window = "\(active.app.name) — \(title)"
-        } else {
-            window = active.app.name
+        window = now.window.map { active in
+            guard let title = active.title, !title.isEmpty else { return active.app.name }
+            return "\(active.app.name) — \(title)"
         }
-        if let project, let matcher = now.evidence {
+        if now.isAway {
+            title = "AWAY"
+            marker = .away
+            nowDetail = "Away"
+            evidence = nil
+        } else if let project, let match = now.match {
             title = Self.shorten(project.shortName.uppercased())
             marker = .project
             nowDetail = project.name
-            evidence = "Matched by \(matcher.pattern)"
+            evidence = Self.evidence(match, branch: branch)
         } else {
             title = "NO PROJECT"
             marker = .noProject
@@ -49,11 +55,20 @@ public struct MenuBar: Equatable, Sendable {
         }
     }
 
+    private static func evidence(_ match: Now.Match, branch: String?) -> String {
+        if let event = match.event {
+            return "Matched by “\(match.evidence.pattern)” in \(event.title)"
+        }
+        return "Matched by \(match.evidence.pattern)" + (branch.map { " · \($0)" } ?? "")
+    }
+
     private static func shorten(_ text: String) -> String {
         text.count <= titleLimit ? text : text.prefix(titleLimit - 1) + "…"
     }
 }
 
 extension Assistant {
-    public var menuBar: MenuBar { MenuBar(now, project: now.project.flatMap(project)) }
+    public var menuBar: MenuBar {
+        MenuBar(now, project: now.project.flatMap(project), branch: now.evidence.flatMap(branch(of:)))
+    }
 }

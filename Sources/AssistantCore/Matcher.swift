@@ -8,9 +8,12 @@ public enum Matcher: Hashable, Sendable {
     /// A URL prefix without the scheme, e.g. `learn.microsoft.com/*/training/`. `*` stands for one
     /// path segment. Matches whole segments, and is never a bare domain.
     case urlPrefix(String)
+    /// A word or phrase in the title of a calendar event under way, matched as whole words,
+    /// ignoring case. Sets Now only when the foreground window matches no Project.
+    case calendarKeyword(String)
 
     public enum Kind: String, Sendable {
-        case repoPath, urlPrefix
+        case repoPath, urlPrefix, calendarKeyword
     }
 
     public enum Invalid: Error, Equatable {
@@ -18,12 +21,15 @@ public enum Matcher: Hashable, Sendable {
         case bareDomain(String)
         /// A repo path that is neither absolute nor under `~`.
         case relativePath(String)
+        /// A calendar keyword too short to mean anything.
+        case shortKeyword(String)
     }
 
     public init(kind: Kind, pattern: String) {
         switch kind {
         case .repoPath: self = .repoPath(pattern)
         case .urlPrefix: self = .urlPrefix(pattern)
+        case .calendarKeyword: self = .calendarKeyword(pattern)
         }
     }
 
@@ -31,6 +37,7 @@ public enum Matcher: Hashable, Sendable {
         switch self {
         case .repoPath: .repoPath
         case .urlPrefix: .urlPrefix
+        case .calendarKeyword: .calendarKeyword
         }
     }
 
@@ -39,6 +46,7 @@ public enum Matcher: Hashable, Sendable {
         switch self {
         case let .repoPath(path): path
         case let .urlPrefix(prefix): prefix
+        case let .calendarKeyword(keyword): keyword
         }
     }
 

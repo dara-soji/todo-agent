@@ -25,15 +25,26 @@ public struct Now: Equatable, Sendable {
     public struct Match: Equatable, Sendable {
         public let project: Project.ID
         public let evidence: Matcher
+        /// The calendar event a calendar-keyword Matcher fitted.
+        public let event: CalendarEvent?
+
+        init(project: Project.ID, evidence: Matcher, event: CalendarEvent? = nil) {
+            self.project = project
+            self.evidence = evidence
+            self.event = event
+        }
     }
 
     /// Before any Signal has arrived.
-    public static let unknown = Now(visit: nil, match: nil)
+    public static let unknown = Now(visit: nil, match: nil, isAway: false)
 
     /// Nil before the first Signal.
     public let visit: Visit?
-    /// Nil means No Project.
+    /// Nil means No Project, or Away.
     public let match: Match?
+    /// Dara has been idle long enough to be Away, outside a matching meeting. Away time is not work:
+    /// it has no Project.
+    public let isAway: Bool
 
     public var window: ActiveWindow? { visit?.window }
     public var since: Date? { visit?.since }

@@ -7,6 +7,9 @@ import AssistantCore
 @MainActor
 final class ActiveWindowSensor: SignalSource {
     private var deliver: ((Signal) -> Void)?
+    private let browser = BrowserURLReader()
+    /// Bumped on every report, so a slow URL read can't overwrite a newer window.
+    private var reportNumber = 0
     private var activationToken: NSObjectProtocol?
     private var permissionTimer: Timer?
 
@@ -61,7 +64,17 @@ final class ActiveWindowSensor: SignalSource {
         let app = App(
             bundleID: frontmost.bundleIdentifier ?? "pid.\(frontmost.processIdentifier)",
             name: frontmost.localizedName ?? "Unknown")
-        deliver(.activeWindow(app: app, windowTitle: focusedWindowTitle()))
+        let title = focusedWindowTitle()
+        guard browser.reads(app.bundleID) else {
+            return deliver(.activeWindow(app: app, windowTitle: title))
+        }
+        // Re-read on every report: switching tabs changes the window title, which triggers one.
+        reportNumber += 1
+        let number = reportNumber
+        browser.url(ofFrontTabIn: app.bundleID) { [weak self] url in
+            guard let self, number == reportNumber else { return }
+            deliver(.activeWindow(app: app, windowTitle: title, url: url))
+        }
     }
 
     private func focusedWindowTitle() -> String? {

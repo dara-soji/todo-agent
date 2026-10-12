@@ -9,7 +9,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var store: SQLiteStore?
     private var assistant: Assistant?
     private var statusItem: StatusItemController?
-    private var sensor: ActiveWindowSensor?
+    private var windowSensor: ActiveWindowSensor?
+    private var calendarSensor: CalendarSensor?
+    private var idleSensor: IdleSensor?
+    private var gitWatcher: GitWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -18,16 +21,28 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let projectsMenu = ProjectsMenu(assistant: assistant)
         let statusItem = StatusItemController(showing: assistant.menuBar, projectsMenu: projectsMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
-        projectsMenu.onChange = { statusItem.render(assistant.menuBar) }
         StatusItemController.registerLoginItemOnFirstLaunch()
 
-        _ = ActiveWindowSensor.requestAccessibility()
-        let sensor = ActiveWindowSensor()
-        self.sensor = sensor
-        sensor.start { signal in
+        let receive: (Signal) -> Void = { signal in
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
         }
+        let gitWatcher = GitWatcher(delivering: receive)
+        self.gitWatcher = gitWatcher
+        gitWatcher.watch(assistant.repoPathsToWatch)
+        projectsMenu.onChange = {
+            gitWatcher.watch(assistant.repoPathsToWatch)
+            statusItem.render(assistant.menuBar)
+        }
+
+        _ = ActiveWindowSensor.requestAccessibility()
+        let windowSensor = ActiveWindowSensor()
+        let calendarSensor = CalendarSensor()
+        let idleSensor = IdleSensor()
+        (self.windowSensor, self.calendarSensor, self.idleSensor) = (windowSensor, calendarSensor, idleSensor)
+        windowSensor.start(delivering: receive)
+        calendarSensor.start(delivering: receive)
+        idleSensor.start(delivering: receive)
     }
 
     /// The Assistant over the SQLite store, or, if that can't be opened or read, over a store
