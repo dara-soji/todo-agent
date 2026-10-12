@@ -4,6 +4,10 @@ import MCP
 
 /// How core values look to Claude Code: snake_case JSON with ISO 8601 dates and UUID strings.
 enum Shapes {
+    static let statuses = ["open", "committed", "done", "dropped", "snoozed"]
+    static let efforts = AssistantCore.Task.Effort.allCases.map(\.rawValue)
+    static let kinds = AssistantCore.Task.Kind.allCases.map(\.rawValue)
+
     static func task(_ task: AssistantCore.Task) -> Value {
         var snoozedUntil: Value = .null
         var waitingOn: Value = .null

@@ -24,6 +24,7 @@ let package = Package(
             .product(name: "NIOCore", package: "swift-nio"),
             .product(name: "NIOPosix", package: "swift-nio"),
             .product(name: "NIOHTTP1", package: "swift-nio"),
+            .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
         ]),
         // The menu-bar helper: OS sensors and AppKit UI wired to the core.
         .executableTarget(name: "AssistantHelper", dependencies: ["AssistantCore", "AssistantPersistence", "AssistantMCP"]),

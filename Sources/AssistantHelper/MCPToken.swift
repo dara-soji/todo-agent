@@ -27,6 +27,9 @@ enum MCPToken {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            // The data-protection keychain honours the accessibility class and doesn't tie the
+            // item to this build's ad-hoc signature, so rebuilding the helper keeps the token.
+            kSecUseDataProtectionKeychain as String: true,
             kSecValueData as String: Data(token.utf8),
         ]
         let status = SecItemAdd(item as CFDictionary, nil)
@@ -40,6 +43,7 @@ enum MCPToken {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
+            kSecUseDataProtectionKeychain as String: true,
         ]
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)

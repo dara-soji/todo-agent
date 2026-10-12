@@ -19,9 +19,18 @@ import Testing
 
         #expect(Set(tools.map(\.name)) == [
             "get_now", "get_next", "list_tasks", "list_projects", "get_calendar_today", "get_operation_log",
-            "add_task", "edit_task", "complete_task", "snooze_task", "drop_task", "delete_task", "commit_task", "skip_task",
+            "add_task", "edit_task", "complete_task", "snooze_task", "drop_task", "delete_task", "restore_task",
+            "commit_task", "skip_task",
         ])
     }
+
+    /// Which Operation each tool runs. The tier a tool declares must be the Guardrail's tier for that
+    /// Operation, so a tool wired to the wrong Operation shows up here once tiers differ.
+    static let operations: [String: OperationKind] = [
+        "add_task": .addTask, "edit_task": .editTask, "complete_task": .completeTask, "snooze_task": .snoozeTask,
+        "drop_task": .dropTask, "delete_task": .deleteTask, "restore_task": .restoreTask, "commit_task": .commitTask,
+        "skip_task": .skipTask,
+    ]
 
     @Test func readToolsAreReadOnlyAndOperationToolsDeclareTheirGuardrailTier() async throws {
         let harness = try await Harness.start()
@@ -30,13 +39,44 @@ import Testing
         let (tools, _) = try await harness.client().listTools()
 
         for tool in tools {
-            if tool.name.hasPrefix("get_") || tool.name.hasPrefix("list_") {
+            if let kind = Self.operations[tool.name] {
+                #expect(tool.annotations.readOnlyHint == false, "\(tool.name)")
+                #expect(tool._meta?["tier"] == .string(harness.assistant.tier(for: kind).rawValue), "\(tool.name)")
+            } else {
                 #expect(tool.annotations.readOnlyHint == true, "\(tool.name)")
                 #expect(tool._meta?["tier"] == nil, "\(tool.name)")
-            } else {
-                #expect(tool.annotations.readOnlyHint == false, "\(tool.name)")
-                #expect(tool._meta?["tier"] == .string("auto"), "\(tool.name)")
             }
+        }
+        #expect(tools.filter { Self.operations[$0.name] != nil }.count == Self.operations.count)
+    }
+
+    @Test func everyResultMatchesItsToolsOutputSchema() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let (tools, _) = try await harness.client().listTools()
+        // Each Operation gets its own Task, deleted first where the tool needs that.
+        func fresh(deleted: Bool = false) throws -> Value {
+            let task = try harness.assistant.quickAdd("Target")
+            if deleted { try harness.assistant.deleteTask(task.id) }
+            return .string(task.id.rawValue.uuidString)
+        }
+        let id = try fresh()
+        let calls: [String: [String: Value]] = [
+            "get_now": [:], "get_next": [:], "list_tasks": [:], "list_projects": [:], "get_calendar_today": [:],
+            "get_operation_log": [:], "add_task": ["title": "New"], "edit_task": ["task_id": id, "title": "Renamed"],
+            "skip_task": ["task_id": try fresh()], "snooze_task": ["task_id": try fresh(), "hours": 1],
+            "commit_task": ["task_id": try fresh()], "complete_task": ["task_id": try fresh()],
+            "drop_task": ["task_id": try fresh()], "delete_task": ["task_id": try fresh()],
+            "restore_task": ["task_id": try fresh(deleted: true)],
+        ]
+        #expect(Set(calls.keys) == Set(tools.map(\.name)))
+
+        for tool in tools {
+            let schema = try #require(tool.outputSchema?.objectValue, "\(tool.name) declares no output schema")
+            let result = try await harness.call(tool.name, try #require(calls[tool.name]))
+            let required = schema["required"]?.arrayValue?.compactMap(\.stringValue) ?? []
+            #expect(!required.isEmpty, "\(tool.name)")
+            #expect(Set(result.keys) == Set(required), "\(tool.name) returned \(result.keys.sorted())")
         }
     }
 
@@ -65,13 +105,16 @@ import Testing
         let harness = try await Harness.start()
         defer { harness.stop() }
 
-        let result = try await harness.call("add_task", ["title": "Write the contract suite", "effort": "small", "kind": "deep"])
+        let result = try await harness.call("add_task", [
+            "title": "Write the contract suite", "effort": "small", "kind": "deep", "back_link": "~/code/todo-agent",
+        ])
 
         #expect(result["status"] == .string("ran"))
         let task = try #require(harness.assistant.tasks.first)
         #expect(task.title == "Write the contract suite")
         #expect(task.effort == .small)
         #expect(task.kind == .deep)
+        #expect(task.backLink == "~/code/todo-agent")
         #expect(result["task"]?.objectValue?["id"] == .string(task.id.rawValue.uuidString))
         #expect(harness.assistant.operationLog.last?.startedBy == .claudeCode)
         #expect(result["log_entry"]?.objectValue?["started_by"] == .string("claudeCode"))
@@ -105,6 +148,31 @@ import Testing
 
         #expect(harness.assistant.task(a.id)?.status == .snoozed(until: wake, note: nil))
         #expect(harness.assistant.task(b.id)?.status == .snoozed(until: nil, note: "Sam"))
+    }
+
+    @Test func snoozeCanHaveBothAWakeTimeAndANote() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let task = try harness.assistant.quickAdd("Chase the invoice")
+        let wake = harness.clock.now + 2 * 86_400
+
+        _ = try await harness.call("snooze_task", [
+            "task_id": .string(task.id.rawValue.uuidString), "until": .string(iso(wake)), "waiting_on": "Accounts",
+        ])
+
+        #expect(harness.assistant.task(task.id)?.status == .snoozed(until: wake, note: "Accounts"))
+    }
+
+    @Test func restoreBringsADeletedTaskBack() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let task = try harness.assistant.quickAdd("Old idea")
+        try harness.assistant.deleteTask(task.id)
+
+        _ = try await harness.call("restore_task", ["task_id": .string(task.id.rawValue.uuidString)])
+
+        #expect(harness.assistant.tasks.map(\.id) == [task.id])
+        #expect(harness.assistant.operationLog.last?.startedBy == .claudeCode)
     }
 
     @Test func deleteMovesTheTaskToTheDeletedList() async throws {
@@ -157,6 +225,9 @@ import Testing
         ("add_task", ["title": Value.string("X"), "effort": Value.string("huge")]),
         ("snooze_task", ["task_id": Value.string("6F9619FF-8B86-D011-B42D-00C04FC964FF"), "until": Value.string("tomorrow")]),
         ("no_such_tool", [String: Value]()),
+        ("get_operation_log", ["limit": Value.int(-1)]),
+        ("get_operation_log", ["limit": Value.int(0)]),
+        ("get_operation_log", ["limit": Value.int(10_000)]),
     ])
     func badCallsAreToolErrors(tool: String, arguments: [String: Value]) async throws {
         let harness = try await Harness.start()
@@ -184,6 +255,9 @@ import Testing
         let now = try await harness.call("get_now", [:])
         #expect(now["project"]?.objectValue?["id"] == .string(project.id.rawValue.uuidString))
         #expect(now["evidence"] == .string("~/code/todo-agent"))
+        // Window titles and URLs never leave the helper: Exclusions can't vet them yet (ticket 10).
+        #expect(now["window"] == nil)
+        #expect(now["app"] == .string("Code"))
 
         let next = try await harness.call("get_next", [:])
         #expect(next["task"]?.objectValue?["id"] == .string(task.id.rawValue.uuidString))
@@ -237,6 +311,16 @@ import Testing
         #expect(try await harness.rawInitialize(authorization: harness.token) == 401)
         #expect(try await harness.rawInitialize(authorization: "Bearer \(harness.token)") == 200)
         await #expect(throws: (any Error).self) { try await harness.client(token: "wrong").listTools() }
+    }
+
+    @Test func anOversizedRequestIsRefusedBeforeItIsRead() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+
+        let status = try await harness.rawInitialize(
+            authorization: "Bearer \(harness.token)", padding: AssistantMCPServer.maxRequestBytes + 1)
+
+        #expect(status == 413)
     }
 
     @Test func theServerListensOnLoopbackOnly() async throws {
@@ -331,7 +415,7 @@ struct Harness {
     }
 
     /// Status code of a bare initialize POST, for checking access rules below the SDK client.
-    func rawInitialize(authorization: String?, host: String? = nil) async throws -> Int {
+    func rawInitialize(authorization: String?, host: String? = nil, padding: Int = 0) async throws -> Int {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -341,7 +425,7 @@ struct Harness {
         request.httpBody = Data("""
             {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25",
              "capabilities":{},"clientInfo":{"name":"raw","version":"1"}}}
-            """.utf8)
+            """.utf8) + Data(repeating: 0x20, count: padding)
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 5
         let delegate = HeadOnly()

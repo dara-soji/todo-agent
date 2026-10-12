@@ -56,11 +56,11 @@ struct Arguments {
     }
 
     func effort(_ key: String) throws -> AssistantCore.Task.Effort? {
-        try read(key, "small, medium or large") { $0.stringValue.flatMap(AssistantCore.Task.Effort.init(rawValue:)) }
+        try read(key, Shapes.efforts.joined(separator: ", ")) { $0.stringValue.flatMap(AssistantCore.Task.Effort.init(rawValue:)) }
     }
 
     func kind(_ key: String) throws -> AssistantCore.Task.Kind? {
-        try read(key, "deep or shallow") { $0.stringValue.flatMap(AssistantCore.Task.Kind.init(rawValue:)) }
+        try read(key, Shapes.kinds.joined(separator: ", ")) { $0.stringValue.flatMap(AssistantCore.Task.Kind.init(rawValue:)) }
     }
 
     /// For edits: absent leaves the field alone (nil), null clears it (.some(nil)), a value sets it.

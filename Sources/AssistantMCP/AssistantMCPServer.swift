@@ -1,6 +1,7 @@
 import AssistantCore
 import Foundation
 import MCP
+import NIOConcurrencyHelpers
 @preconcurrency import NIOCore
 @preconcurrency import NIOHTTP1
 @preconcurrency import NIOPosix
@@ -17,6 +18,10 @@ public final class AssistantMCPServer {
 
     public nonisolated static let endpoint = "/mcp"
     public nonisolated static let defaultPort = 47_615
+    /// Larger requests are refused unread. Tool calls are a few kilobytes.
+    public nonisolated static let maxRequestBytes = 1_000_000
+    /// A session nobody has used for this long is closed.
+    nonisolated static let sessionIdleLimit: TimeInterval = 60 * 60
 
     public let tools: AssistantTools
     private let router: Router
@@ -80,6 +85,7 @@ private actor Router {
     private struct Session {
         let server: Server
         let transport: StatefulHTTPServerTransport
+        var lastUsed: Date
     }
 
     private let token: String
@@ -95,8 +101,10 @@ private actor Router {
         guard authorized(request) else {
             return .error(statusCode: 401, .invalidRequest("Unauthorized"), extraHeaders: ["WWW-Authenticate": "Bearer"])
         }
+        await closeIdleSessions()
         let sessionID = request.header(HTTPHeaderName.sessionID)
         if let sessionID, let session = sessions[sessionID] {
+            sessions[sessionID]?.lastUsed = Date()
             let response = await session.transport.handleRequest(request)
             if request.method.uppercased() == "DELETE", response.statusCode == 200 {
                 await close(sessionID)
@@ -110,6 +118,14 @@ private actor Router {
             return .error(statusCode: 404, .invalidRequest("Session not found"))
         }
         return .error(statusCode: 400, .invalidRequest("Missing \(HTTPHeaderName.sessionID) header"))
+    }
+
+    /// Sessions a conversation abandoned without saying goodbye.
+    private func closeIdleSessions() async {
+        let cutoff = Date().addingTimeInterval(-AssistantMCPServer.sessionIdleLimit)
+        for (id, session) in sessions where session.lastUsed < cutoff {
+            await close(id)
+        }
     }
 
     func closeAllSessions() async {
@@ -138,7 +154,7 @@ private actor Router {
             await transport.disconnect()
             return .error(statusCode: 500, .internalError("Couldn't start the session"))
         }
-        sessions[id] = Session(server: server, transport: transport)
+        sessions[id] = Session(server: server, transport: transport, lastUsed: Date())
         let response = await transport.handleRequest(request)
         if case .error = response { await close(id) }
         return response
@@ -181,6 +197,9 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private let router: Router
     private var head: HTTPRequestHead?
     private var body = ByteBuffer()
+    private var tooLarge = false
+    /// Set when the client goes away, so a streaming response stops instead of writing into nothing.
+    private let disconnected = NIOLockedValueBox(false)
 
     init(router: Router) {
         self.router = router
@@ -191,16 +210,36 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         case let .head(head):
             self.head = head
             body.clear()
+            tooLarge = (head.headers.first(name: "Content-Length").flatMap(Int.init) ?? 0) > AssistantMCPServer.maxRequestBytes
         case var .body(buffer):
-            body.writeBuffer(&buffer)
+            guard !tooLarge else { return }
+            if body.readableBytes + buffer.readableBytes > AssistantMCPServer.maxRequestBytes {
+                tooLarge = true
+                body.clear()
+            } else {
+                body.writeBuffer(&buffer)
+            }
         case .end:
             guard let head else { return }
             self.head = nil
+            if tooLarge {
+                let bound = NIOLoopBound(context, eventLoop: context.eventLoop)
+                _Concurrency.Task {
+                    await self.write(.error(statusCode: 413, .invalidRequest("Request too large")),
+                                     version: head.version, context: bound)
+                }
+                return
+            }
             let request = makeRequest(head)
             // The context may only be touched on its event loop; NIOLoopBound enforces that.
             let bound = NIOLoopBound(context, eventLoop: context.eventLoop)
             _Concurrency.Task { await self.respond(to: request, head: head, context: bound) }
         }
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        disconnected.withLockedValue { $0 = true }
+        context.fireChannelInactive()
     }
 
     private func respond(to request: HTTPRequest, head: HTTPRequestHead, context: NIOLoopBound<ChannelHandlerContext>) async {
@@ -232,6 +271,7 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             }
             do {
                 for try await chunk in stream {
+                    if disconnected.withLockedValue({ $0 }) { break }
                     loop.execute {
                         var buffer = bound.value.channel.allocator.buffer(capacity: chunk.count)
                         buffer.writeBytes(chunk)

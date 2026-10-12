@@ -94,6 +94,9 @@ public final class Assistant {
         return Array(Set(paths)).sorted()
     }
 
+    /// The Assistant's current time, for adapters turning "in two hours" into a date.
+    public var clockNow: Date { clock.now }
+
     /// Today's calendar events still to come or under way, in start order.
     public var calendarToday: [CalendarEvent] {
         let endOfDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: clock.now))!
