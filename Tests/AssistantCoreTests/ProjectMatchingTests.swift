@@ -4,13 +4,13 @@ import AssistantCore
 
 @Suite struct ProjectMatchingTests {
     let clock = FakeClock()
-    let store = InMemoryProjectStore()
+    let store = InMemoryStore()
     let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
     let terminal = App(bundleID: "com.apple.Terminal", name: "Terminal")
     let safari = App(bundleID: "com.apple.Safari", name: "Safari")
 
     func makeAssistant() -> Assistant {
-        try! Assistant(clock: clock, projects: store, homeDirectory: "/Users/dara")
+        try! Assistant(clock: clock, store: store, homeDirectory: "/Users/dara")
     }
 
     func browse(_ assistant: Assistant, _ url: String) {
@@ -246,10 +246,10 @@ import AssistantCore
         let assistant = makeAssistant()
         let todo = try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
         assistant.receive(.activeWindow(app: code, windowTitle: "~/code/todo-agent"))
-        store.failSaves = true
+        store.failCommits = true
 
-        #expect(throws: InMemoryProjectStore.SaveFailed.self) { try assistant.archiveProject(todo.id) }
-        #expect(throws: InMemoryProjectStore.SaveFailed.self) {
+        #expect(throws: InMemoryStore.CommitFailed.self) { try assistant.archiveProject(todo.id) }
+        #expect(throws: InMemoryStore.CommitFailed.self) {
             try assistant.declareProject(name: "Other", matchers: [])
         }
 

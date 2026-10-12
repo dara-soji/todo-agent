@@ -8,7 +8,7 @@ import AssistantCore
     let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
 
     func makeAssistant() -> Assistant {
-        try! Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+        try! Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara")
     }
 
     func event(_ title: String, startsIn start: Double = -5, lasts minutes: Double = 30) -> CalendarEvent {
@@ -116,7 +116,7 @@ import AssistantCore
     let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
 
     func makeAssistant() throws -> (Assistant, Project) {
-        let assistant = try Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+        let assistant = try Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara")
         let todo = try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
         assistant.receive(.activeWindow(app: code, windowTitle: "~/code/todo-agent"))
         return (assistant, todo)
@@ -172,7 +172,7 @@ import AssistantCore
     let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
 
     @Test func theBranchOfTheMatchedRepoIsShownWithItsEvidence() throws {
-        let assistant = try Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+        let assistant = try Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara")
         try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
 
         assistant.receive(.git(repo: "/Users/dara/code/todo-agent", branch: "ticket-03"))
@@ -182,7 +182,7 @@ import AssistantCore
     }
 
     @Test func reposToWatchAreTheActiveProjectsRepoPathsInFull() throws {
-        let assistant = try Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+        let assistant = try Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara")
         try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent"), .urlPrefix("github.com/dara-soji/todo-agent")])
         let old = try assistant.declareProject(name: "old", matchers: [.repoPath("/opt/old")])
         try assistant.archiveProject(old.id)

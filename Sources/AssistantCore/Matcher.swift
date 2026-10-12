@@ -1,7 +1,7 @@
 import Foundation
 
 /// A rule saying that a Signal belongs to a Project.
-public enum Matcher: Hashable, Sendable {
+public enum Matcher: Hashable, Sendable, Codable {
     /// A repo or folder, written `~/…` or absolute. Matches a window whose title shows that path or
     /// anything under it, which covers VS Code (title set to show the path) and Terminal's working directory.
     case repoPath(String)

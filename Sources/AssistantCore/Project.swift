@@ -1,13 +1,13 @@
 import Foundation
 
 /// An ongoing body of work that Signals are matched to through its Matchers. Projects are flat.
-public struct Project: Identifiable, Equatable, Sendable {
-    public struct ID: Hashable, Sendable {
+public struct Project: Identifiable, Equatable, Sendable, Codable {
+    public struct ID: Hashable, Sendable, Codable {
         public let rawValue: UUID
         public init(_ rawValue: UUID = UUID()) { self.rawValue = rawValue }
     }
 
-    public enum Status: String, Equatable, Sendable {
+    public enum Status: String, Equatable, Sendable, Codable {
         case active, archived
     }
 
@@ -25,11 +25,4 @@ public struct Project: Identifiable, Equatable, Sendable {
         self.status = status
         self.matchers = matchers
     }
-}
-
-/// Persistence port for Projects. The helper's SQLite store conforms; tests use an in-memory fake.
-/// A save that fails changes nothing: the Assistant applies a change only once it is stored.
-public protocol ProjectStore {
-    func loadProjects() throws -> [Project]
-    func save(_ project: Project) throws
 }

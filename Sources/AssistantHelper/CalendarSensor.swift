@@ -15,7 +15,8 @@ final class CalendarSensor: SignalSource {
         self.deliver = deliver
         store.requestFullAccessToEvents { [weak self] granted, _ in
             guard granted else { return }  // Without access the calendar simply never matches.
-            Task { @MainActor in self?.beginReporting() }
+            // Qualified: AssistantCore.Task is the domain Task.
+            _Concurrency.Task { @MainActor in self?.beginReporting() }
         }
     }
 

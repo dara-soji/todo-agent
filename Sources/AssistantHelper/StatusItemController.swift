@@ -10,10 +10,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var menuBar: MenuBar
     private let storeProblem: String?
     private let projectsMenu: ProjectsMenu
+    private let tasksMenu: TasksMenu
+    /// Opens the quick-add palette.
+    var onAddTask: () -> Void = {}
 
-    init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, storeProblem: String?) {
+    init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, storeProblem: String?) {
         self.menuBar = menuBar
         self.projectsMenu = projectsMenu
+        self.tasksMenu = tasksMenu
         self.storeProblem = storeProblem
         super.init()
         menu.delegate = self
@@ -47,11 +51,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         menu.addItem(header("Now"))
-        menu.addItem(detail(menuBar.nowDetail))
+        if let committed = menuBar.committedTask { menu.addItem(detail(committed)) }
+        menu.addItem(metadata(menuBar.nowDetail))
         if let evidence = menuBar.evidence { menu.addItem(metadata(evidence)) }
         if let window = menuBar.window { menu.addItem(metadata(window)) }
+        if let markDone = tasksMenu.markDoneItem() { menu.addItem(markDone) }
 
         menu.addItem(.separator())
+        let addTask = action("Add task…", #selector(addTask))
+        addTask.keyEquivalent = " "
+        addTask.keyEquivalentModifierMask = .option
+        menu.addItem(addTask)
+        menu.addItem(tasksMenu.tasksItem())
+        if let deleted = tasksMenu.deletedItem() { menu.addItem(deleted) }
         menu.addItem(projectsMenu.item())
 
         let permissions = [
@@ -103,6 +115,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
         item.target = self
         return item
+    }
+
+    @objc private func addTask() {
+        onAddTask()
     }
 
     @objc private func openAccessibilitySettings() {

@@ -3,7 +3,10 @@ import AppKit
 /// Dara's reference theme: dark/olive/steel palette, #FFA500 accent,
 /// Tektur for display and titles, JetBrains Mono for uppercase labels and metadata.
 enum Theme {
+    static let ink = NSColor(hex: 0x0D0F10)
+    static let olive = NSColor(hex: 0x303B35)
     static let steel = NSColor(hex: 0x6B706D)
+    static let paper = NSColor(hex: 0xE8ECE9)
     static let accent = NSColor(hex: 0xFFA500)
 
     /// Uppercase, wide-tracked labels and metadata. Falls back to the system monospaced font
