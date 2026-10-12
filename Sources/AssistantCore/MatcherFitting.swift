@@ -1,0 +1,99 @@
+import Foundation
+
+/// How Matchers are written down and how they fit a window. Paths under the home directory are
+/// kept as `~/…` so Matchers read the same however the window shows the path.
+struct MatcherFitting {
+    let homeDirectory: String
+
+    /// The Matcher in its stored form, or why it can't be one.
+    func normalised(_ matcher: Matcher) throws -> Matcher {
+        switch matcher {
+        case let .repoPath(path):
+            let path = tilde(trimmingSlash(path.trimmingCharacters(in: .whitespaces)))
+            guard path == "~" || path.hasPrefix("~/") || path.hasPrefix("/") else {
+                throw Matcher.Invalid.relativePath(path)
+            }
+            return .repoPath(path)
+        case let .urlPrefix(prefix):
+            let prefix = withoutScheme(prefix.trimmingCharacters(in: .whitespaces))
+            let parts = prefix.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+            let literalPath = parts.count == 2 && parts[1].split(separator: "/").contains { $0 != "*" }
+            guard !parts[0].isEmpty, literalPath else {
+                throw Matcher.Invalid.bareDomain(prefix)
+            }
+            return .urlPrefix(withoutWWW(parts[0].lowercased()) + "/" + parts[1])
+        }
+    }
+
+    /// Whether a stored Matcher fits the window.
+    func fits(_ matcher: Matcher, _ window: ActiveWindow) -> Bool {
+        switch matcher {
+        case let .repoPath(path):
+            guard let title = window.title else { return false }
+            return [path, absolute(path)].contains { title.showsPath($0) }
+        case let .urlPrefix(prefix):
+            guard let url = window.url, let host = url.host(percentEncoded: false) else { return false }
+            let port = url.port.map { ":\($0)" } ?? ""
+            let page = withoutWWW(host.lowercased()) + port + url.path(percentEncoded: false)
+            return urlFits(prefix: prefix, page: page)
+        }
+    }
+
+    // MARK: Paths
+
+    private func tilde(_ path: String) -> String {
+        if path == homeDirectory { return "~" }
+        if path.hasPrefix(homeDirectory + "/") { return "~" + path.dropFirst(homeDirectory.count) }
+        return path
+    }
+
+    private func absolute(_ path: String) -> String {
+        path == "~" || path.hasPrefix("~/") ? homeDirectory + path.dropFirst() : path
+    }
+
+    private func trimmingSlash(_ path: String) -> String {
+        path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+    }
+
+    // MARK: URLs
+
+    private func withoutScheme(_ text: String) -> String {
+        for scheme in ["https://", "http://"] where text.lowercased().hasPrefix(scheme) {
+            return String(text.dropFirst(scheme.count))
+        }
+        return text
+    }
+
+    private func withoutWWW(_ text: String) -> String {
+        text.hasPrefix("www.") ? String(text.dropFirst(4)) : text
+    }
+
+    /// Segment by segment: `*` takes any one segment, and a trailing `/` requires the page to go on below it.
+    private func urlFits(prefix: String, page: String) -> Bool {
+        let wanted = prefix.split(separator: "/", omittingEmptySubsequences: false)
+        let actual = page.split(separator: "/", omittingEmptySubsequences: false)
+        for (index, segment) in wanted.enumerated() {
+            if index == wanted.count - 1 && segment.isEmpty { return actual.count > index && !actual[index].isEmpty }
+            guard index < actual.count, !actual[index].isEmpty else { return false }
+            if segment != "*" && actual[index] != segment { return false }
+        }
+        return true
+    }
+}
+
+private extension String {
+    /// Whether this window title shows `path` or something under it, as a whole path:
+    /// `~/code/todo` is not shown by `~/code/todo-agent`. Paths may contain spaces.
+    func showsPath(_ path: String) -> Bool {
+        let before = Set(" \t[(\"'—|:")
+        let after = Set("/ \t])\"'—|:,;")
+        var searchFrom = startIndex
+        while let found = range(of: path, range: searchFrom..<endIndex) {
+            let startsCleanly = found.lowerBound == startIndex || before.contains(self[index(before: found.lowerBound)])
+            let endsCleanly = found.upperBound == endIndex || after.contains(self[found.upperBound])
+            if startsCleanly && endsCleanly { return true }
+            searchFrom = index(after: found.lowerBound)
+        }
+        return false
+    }
+}

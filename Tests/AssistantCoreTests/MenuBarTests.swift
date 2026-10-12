@@ -6,32 +6,55 @@ import AssistantCore
     let clock = FakeClock()
     let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
 
+    func makeAssistant() -> Assistant {
+        try! Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+    }
+
     @Test func showsADashBeforeAnySignal() {
-        let assistant = Assistant(clock: clock)
+        let assistant = makeAssistant()
         #expect(assistant.menuBar.title == "—")
+        #expect(assistant.menuBar.marker == .unknown)
     }
 
-    @Test func showsTheAppInCapsAndTheWindowTitle() {
-        let assistant = Assistant(clock: clock)
-        assistant.receive(.activeWindow(app: code, windowTitle: "Program.cs"))
-        #expect(assistant.menuBar.title == "CODE · Program.cs")
+    @Test func showsTheMatchedProjectsShortNameInCapsWithItsDot() throws {
+        let assistant = makeAssistant()
+        try assistant.declareProject(name: "Personal assistant", shortName: "todo", matchers: [.repoPath("~/code/todo-agent")])
+
+        assistant.receive(.activeWindow(app: code, windowTitle: "Program.swift — ~/code/todo-agent [main]"))
+
+        #expect(assistant.menuBar.title == "TODO")
+        #expect(assistant.menuBar.marker == .project)
     }
 
-    @Test func showsOnlyTheAppWhenTheTitleCannotBeRead() {
-        let assistant = Assistant(clock: clock)
+    @Test func dropdownGivesTheProjectItsEvidenceAndTheFullWindow() throws {
+        let assistant = makeAssistant()
+        try assistant.declareProject(name: "Personal assistant", matchers: [.repoPath("~/code/todo-agent")])
+
+        assistant.receive(.activeWindow(app: code, windowTitle: "NowTests.swift — /Users/dara/code/todo-agent [ticket-02]"))
+
+        #expect(assistant.menuBar.nowDetail == "Personal assistant")
+        #expect(assistant.menuBar.evidence == "Matched by ~/code/todo-agent")
+        #expect(assistant.menuBar.window == "Code — NowTests.swift — /Users/dara/code/todo-agent [ticket-02]")
+    }
+
+    @Test func showsNoProjectWhenNothingMatches() {
+        let assistant = makeAssistant()
+
         assistant.receive(.activeWindow(app: code, windowTitle: nil))
-        #expect(assistant.menuBar.title == "CODE")
+
+        #expect(assistant.menuBar.title == "NO PROJECT")
+        #expect(assistant.menuBar.marker == .noProject)
+        #expect(assistant.menuBar.nowDetail == "No Project")
+        #expect(assistant.menuBar.evidence == nil)
+        #expect(assistant.menuBar.window == "Code")
     }
 
-    @Test func shortensLongTitlesSoTheMenuBarStaysCompact() {
-        let assistant = Assistant(clock: clock)
-        assistant.receive(.activeWindow(app: code, windowTitle: "NowTests.swift — todo-agent — ~/Documents/todo-agent [ticket-01]"))
-        #expect(assistant.menuBar.title == "CODE · NowTests.swift — todo-agent — ~/D…")
-    }
+    @Test func shortensLongShortNamesSoTheMenuBarStaysCompact() throws {
+        let assistant = makeAssistant()
+        try assistant.declareProject(name: "Spreadsheet of household finances", matchers: [.urlPrefix("docs.google.com/spreadsheets/d/abc")])
 
-    @Test func dropdownShowsTheFullWindowTitle() {
-        let assistant = Assistant(clock: clock)
-        assistant.receive(.activeWindow(app: code, windowTitle: "NowTests.swift — todo-agent — ~/Documents/todo-agent [ticket-01]"))
-        #expect(assistant.menuBar.nowDetail == "Code — NowTests.swift — todo-agent — ~/Documents/todo-agent [ticket-01]")
+        assistant.receive(.activeWindow(app: code, windowTitle: nil, url: URL(string: "https://docs.google.com/spreadsheets/d/abc/edit")))
+
+        #expect(assistant.menuBar.title == "SPREADSHEET OF…")
     }
 }

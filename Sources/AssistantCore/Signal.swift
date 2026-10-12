@@ -1,3 +1,5 @@
+import Foundation
+
 /// An app as the OS reports it.
 public struct App: Hashable, Sendable {
     public let bundleID: String
@@ -11,9 +13,9 @@ public struct App: Hashable, Sendable {
 
 /// One observable piece of evidence about what Dara is doing.
 public enum Signal: Equatable, Sendable {
-    /// The frontmost app and its focused window title. The title is nil when it can't be read
-    /// (no Accessibility permission, or the app has no focused window).
-    case activeWindow(app: App, windowTitle: String?)
+    /// The frontmost app, its focused window title, and the page URL when it is a browser.
+    /// The title is nil when it can't be read (no Accessibility permission, or no focused window).
+    case activeWindow(app: App, windowTitle: String?, url: URL? = nil)
 }
 
 /// Port through which Signals reach the assistant. The helper's OS sensors conform to it.

@@ -1,9 +1,42 @@
 import Foundation
 
-/// The single piece of work Dara is doing at this moment, as far as the assistant can tell.
-public enum Now: Equatable, Sendable {
-    /// No Signal has arrived yet.
-    case unknown
-    /// The focused window, and when Dara arrived on it.
-    case window(app: App, title: String?, since: Date)
+/// The window Dara is in, as the latest Signal reported it.
+public struct ActiveWindow: Equatable, Sendable {
+    public let app: App
+    public let title: String?
+    public let url: URL?
+
+    public init(app: App, title: String?, url: URL? = nil) {
+        self.app = app
+        self.title = title
+        self.url = url
+    }
+}
+
+/// The single piece of work Dara is doing at this moment, resolved to a Project where a Matcher fits.
+public struct Now: Equatable, Sendable {
+    /// A window and when Dara arrived on it.
+    public struct Visit: Equatable, Sendable {
+        public let window: ActiveWindow
+        public let since: Date
+    }
+
+    /// A Project and the Matcher that put Now on it.
+    public struct Match: Equatable, Sendable {
+        public let project: Project.ID
+        public let evidence: Matcher
+    }
+
+    /// Before any Signal has arrived.
+    public static let unknown = Now(visit: nil, match: nil)
+
+    /// Nil before the first Signal.
+    public let visit: Visit?
+    /// Nil means No Project.
+    public let match: Match?
+
+    public var window: ActiveWindow? { visit?.window }
+    public var since: Date? { visit?.since }
+    public var project: Project.ID? { match?.project }
+    public var evidence: Matcher? { match?.evidence }
 }
