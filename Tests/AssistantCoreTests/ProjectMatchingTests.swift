@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import AssistantCore
+import AssistantTestSupport
 
 @Suite struct ProjectMatchingTests {
     let clock = FakeClock()

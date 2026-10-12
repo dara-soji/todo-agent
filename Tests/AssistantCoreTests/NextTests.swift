@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import AssistantCore
+import AssistantTestSupport
 
 /// The fake clock starts on Saturday 3 October 2026 at 04:00 UTC: morning.
 @Suite struct NextTests {
@@ -13,6 +14,7 @@ import AssistantCore
         return try! Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara", calendar: utc)
     }
 
+    @discardableResult
     func add(_ assistant: Assistant, _ title: String, effort: Task.Effort? = nil, kind: Task.Kind? = nil,
              dueIn hours: Double? = nil, project: Project.ID? = nil) throws -> Task {
         try assistant.addTask(TaskDraft(

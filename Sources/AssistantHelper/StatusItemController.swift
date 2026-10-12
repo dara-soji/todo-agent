@@ -13,6 +13,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let tasksMenu: TasksMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
+    /// Whether Claude Code can connect, for the Connect Claude Code item.
+    var claudeCode: ClaudeCodeConnection.State = .starting
     /// The latest state, read whenever the dropdown opens: Next can change with time alone.
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
@@ -100,6 +102,14 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        switch claudeCode {
+        case .starting:
+            menu.addItem(withTitle: "Claude Code: starting…", action: nil, keyEquivalent: "").isEnabled = false
+        case .ready:
+            menu.addItem(action("Connect Claude Code…", #selector(connectClaudeCode)))
+        case let .unavailable(reason):
+            menu.addItem(detail("Claude Code unavailable: \(reason)"))
+        }
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
@@ -142,6 +152,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
         item.target = self
         return item
+    }
+
+    @objc private func connectClaudeCode() {
+        if case let .ready(command) = claudeCode { ClaudeCodeConnection.offer(command) }
     }
 
     @objc private func addTask() {

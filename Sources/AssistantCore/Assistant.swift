@@ -94,7 +94,18 @@ public final class Assistant {
         return Array(Set(paths)).sorted()
     }
 
+    /// Today's calendar events still to come or under way, in start order.
+    public var calendarToday: [CalendarEvent] {
+        let endOfDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: clock.now))!
+        return calendarEvents.filter { $0.end > clock.now && $0.start < endOfDay }.sorted { $0.start < $1.start }
+    }
+
     // MARK: Operations
+
+    /// The Guardrail tier an Operation of this kind runs in, whoever starts it.
+    public func tier(for kind: OperationKind) -> Tier {
+        guardrail.tier(for: kind)
+    }
 
     /// Runs an Operation through the Guardrail: stores what it writes together with its log entry,
     /// then applies it. A failed store write changes nothing.

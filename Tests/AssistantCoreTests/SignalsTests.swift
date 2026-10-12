@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import AssistantCore
+import AssistantTestSupport
 
 @Suite struct CalendarTests {
     let clock = FakeClock()
@@ -188,5 +189,23 @@ import AssistantCore
         try assistant.archiveProject(old.id)
 
         #expect(assistant.repoPathsToWatch == ["/Users/dara/code/todo-agent"])
+    }
+}
+
+@Suite struct CalendarTodayTests {
+    @Test func listsTodaysEventsStillToComeOrUnderWayInOrder() throws {
+        let clock = FakeClock()
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let assistant = try Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara", calendar: utc)
+        func event(_ title: String, _ start: Double, _ minutes: Double) -> CalendarEvent {
+            CalendarEvent(title: title, start: clock.now + start * 60, end: clock.now + (start + minutes) * 60)
+        }
+
+        assistant.receive(.calendar(events: [
+            event("Later", 120, 30), event("Over", -60, 30), event("Under way", -10, 30), event("Tomorrow", 24 * 60, 30),
+        ]))
+
+        #expect(assistant.calendarToday.map(\.title) == ["Under way", "Later"])
     }
 }
