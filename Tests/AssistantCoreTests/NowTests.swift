@@ -10,11 +10,10 @@ import AssistantCore
         #expect(assistant.now == .unknown)
     }
 
-    @Test func focusSignalSetsNowToTheActiveAppAndWindowTitle() {
+    @Test func activeWindowSignalSetsNowToTheActiveAppAndWindowTitle() {
         let assistant = Assistant(clock: clock)
-        let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
 
-        assistant.receive(.focus(app: code, windowTitle: "Package.swift — todo-agent [main]"))
+        assistant.receive(.activeWindow(app: code, windowTitle: "Package.swift — todo-agent [main]"))
 
         #expect(assistant.now == .window(app: code, title: "Package.swift — todo-agent [main]", since: clock.now))
     }
@@ -23,9 +22,9 @@ import AssistantCore
         let assistant = Assistant(clock: clock)
         let arrived = clock.now
 
-        assistant.receive(.focus(app: code, windowTitle: "Program.cs — dotnet-exercises"))
+        assistant.receive(.activeWindow(app: code, windowTitle: "Program.cs — dotnet-exercises"))
         clock.advance(minutes: 3)
-        assistant.receive(.focus(app: code, windowTitle: "Program.cs — dotnet-exercises"))
+        assistant.receive(.activeWindow(app: code, windowTitle: "Program.cs — dotnet-exercises"))
 
         #expect(assistant.now == .window(app: code, title: "Program.cs — dotnet-exercises", since: arrived))
     }
@@ -33,9 +32,9 @@ import AssistantCore
     @Test func movingToAnotherWindowStartsAFreshNow() {
         let assistant = Assistant(clock: clock)
 
-        assistant.receive(.focus(app: code, windowTitle: "Program.cs — dotnet-exercises"))
+        assistant.receive(.activeWindow(app: code, windowTitle: "Program.cs — dotnet-exercises"))
         clock.advance(minutes: 3)
-        assistant.receive(.focus(app: safari, windowTitle: nil))
+        assistant.receive(.activeWindow(app: safari, windowTitle: nil))
 
         #expect(assistant.now == .window(app: safari, title: nil, since: clock.now))
     }

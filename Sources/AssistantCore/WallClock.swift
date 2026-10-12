@@ -1,7 +1,7 @@
 import Foundation
 
 /// Port for the current time. The helper passes the system clock; tests pass a fake they advance by hand.
-public protocol WallClock: AnyObject {
+public protocol WallClock {
     var now: Date { get }
 }
 

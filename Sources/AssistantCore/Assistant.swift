@@ -11,7 +11,7 @@ public final class Assistant {
 
     public func receive(_ signal: Signal) {
         switch signal {
-        case let .focus(app, title):
+        case let .activeWindow(app, title):
             if case let .window(currentApp, currentTitle, _) = now, currentApp == app, currentTitle == title {
                 return
             }

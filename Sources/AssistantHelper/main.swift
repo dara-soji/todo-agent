@@ -6,9 +6,10 @@ import AssistantPersistence
 @MainActor
 final class HelperDelegate: NSObject, NSApplicationDelegate {
     private let assistant = Assistant(clock: SystemClock())
+    /// Held for the helper's whole run: owning it is what makes the helper the store's only writer.
     private var store: SQLiteStore?
     private var statusItem: StatusItemController?
-    private var sensor: FocusSensor?
+    private var sensor: ActiveWindowSensor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         var storeProblem: String?
@@ -18,18 +19,18 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             storeProblem = "\(error)"
         }
 
-        let statusItem = StatusItemController(storeProblem: storeProblem)
+        let statusItem = StatusItemController(showing: assistant.menuBar, storeProblem: storeProblem)
         self.statusItem = statusItem
-        statusItem.render(assistant.menuBar)
+        StatusItemController.registerLoginItemOnFirstLaunch()
 
-        _ = FocusSensor.requestAccessibility()
-        let sensor = FocusSensor { [weak self] signal in
+        _ = ActiveWindowSensor.requestAccessibility()
+        let sensor = ActiveWindowSensor()
+        self.sensor = sensor
+        sensor.start { [weak self] signal in
             guard let self else { return }
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
         }
-        self.sensor = sensor
-        sensor.start()
     }
 }
 

@@ -7,19 +7,25 @@ import ServiceManagement
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
-    private var menuBar: MenuBar?
+    private var menuBar: MenuBar
     private let storeProblem: String?
 
-    init(storeProblem: String?) {
+    init(showing menuBar: MenuBar, storeProblem: String?) {
+        self.menuBar = menuBar
         self.storeProblem = storeProblem
         super.init()
         menu.delegate = self
         statusItem.menu = menu
+        drawTitle()
     }
 
     func render(_ menuBar: MenuBar) {
         guard menuBar != self.menuBar else { return }
         self.menuBar = menuBar
+        drawTitle()
+    }
+
+    private func drawTitle() {
         statusItem.button?.attributedTitle = NSAttributedString(string: menuBar.title, attributes: [
             .font: Theme.mono(12), .kern: 0.6,
         ])
@@ -30,9 +36,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         menu.addItem(header("Now"))
-        menu.addItem(detail(menuBar?.nowDetail ?? "—"))
+        menu.addItem(detail(menuBar.nowDetail))
 
-        if !FocusSensor.hasAccessibility {
+        if !ActiveWindowSensor.hasAccessibility {
             menu.addItem(.separator())
             menu.addItem(action("Allow Accessibility to read window titles…", #selector(openAccessibilitySettings)))
         }
@@ -50,7 +56,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func header(_ text: String) -> NSMenuItem {
         let item = NSMenuItem()
-        item.attributedTitle = Theme.label(text)
+        item.attributedTitle = Theme.label(text, color: Theme.accent)
         item.isEnabled = false
         return item
     }
@@ -71,6 +77,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func openAccessibilitySettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         NSWorkspace.shared.open(url)
+    }
+
+    /// Registers the bundled helper as a login item the first time it runs, so it is always on.
+    /// Later launches respect Dara's choice in the menu.
+    static func registerLoginItemOnFirstLaunch() {
+        let key = "loginItemOffered"
+        guard Bundle.main.bundleIdentifier != nil, !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        try? SMAppService.mainApp.register()
     }
 
     @objc private func toggleLoginItem() {

@@ -3,17 +3,17 @@ import ApplicationServices
 import AssistantCore
 
 /// Reads the frontmost app (NSWorkspace, no permission) and its focused window title
-/// (Accessibility) and reports each change as a focus Signal.
+/// (Accessibility) and reports each change as an activeWindow Signal.
 @MainActor
-final class FocusSensor {
-    private let onSignal: (Signal) -> Void
+final class ActiveWindowSensor: SignalSource {
+    private var deliver: ((Signal) -> Void)?
+    private var activationToken: NSObjectProtocol?
+    private var permissionTimer: Timer?
+
+    private var frontmost: NSRunningApplication?
     private var observer: AXObserver?
     private var observedApp: AXUIElement?
     private var observedWindow: AXUIElement?
-
-    init(onSignal: @escaping (Signal) -> Void) {
-        self.onSignal = onSignal
-    }
 
     /// Whether window titles can be read. Asks macOS to show the Accessibility prompt once if not.
     static func requestAccessibility() -> Bool {
@@ -24,27 +24,44 @@ final class FocusSensor {
 
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
 
-    func start() {
-        NSWorkspace.shared.notificationCenter.addObserver(
+    func start(delivering deliver: @escaping (Signal) -> Void) {
+        guard activationToken == nil else { return }
+        self.deliver = deliver
+        activationToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.frontmostChanged() }
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated { self?.frontmostChanged(to: app) }
         }
-        frontmostChanged()
+        if !Self.hasAccessibility { waitForAccessibility() }
+        frontmostChanged(to: NSWorkspace.shared.frontmostApplication)
     }
 
-    private func frontmostChanged() {
-        guard let running = NSWorkspace.shared.frontmostApplication else { return }
-        observe(pid: running.processIdentifier)
+    /// Titles start flowing as soon as Dara grants Accessibility, without needing an app switch.
+    private func waitForAccessibility() {
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, Self.hasAccessibility else { return }
+                self.permissionTimer?.invalidate()
+                self.permissionTimer = nil
+                self.frontmostChanged(to: self.frontmost)
+            }
+        }
+    }
+
+    private func frontmostChanged(to app: NSRunningApplication?) {
+        guard let app else { return }
+        frontmost = app
+        observe(pid: app.processIdentifier)
         report()
     }
 
     private func report() {
-        guard let running = NSWorkspace.shared.frontmostApplication else { return }
+        guard let frontmost, let deliver else { return }
         let app = App(
-            bundleID: running.bundleIdentifier ?? "pid.\(running.processIdentifier)",
-            name: running.localizedName ?? "Unknown")
-        onSignal(.focus(app: app, windowTitle: focusedWindowTitle()))
+            bundleID: frontmost.bundleIdentifier ?? "pid.\(frontmost.processIdentifier)",
+            name: frontmost.localizedName ?? "Unknown")
+        deliver(.activeWindow(app: app, windowTitle: focusedWindowTitle()))
     }
 
     private func focusedWindowTitle() -> String? {
@@ -67,6 +84,10 @@ final class FocusSensor {
 
     // MARK: Accessibility observer
 
+    // The observer's refcon is unretained: the helper keeps this sensor alive for its whole run,
+    // and stopObserving() removes every registration before the observer is released.
+    private var refcon: UnsafeMutableRawPointer { Unmanaged.passUnretained(self).toOpaque() }
+
     private func observe(pid: pid_t) {
         stopObserving()
         observedApp = AXUIElementCreateApplication(pid)
@@ -74,16 +95,16 @@ final class FocusSensor {
 
         let callback: AXObserverCallback = { _, _, notification, refcon in
             guard let refcon else { return }
-            let sensor = Unmanaged<FocusSensor>.fromOpaque(refcon).takeUnretainedValue()
+            let sensor = Unmanaged<ActiveWindowSensor>.fromOpaque(refcon).takeUnretainedValue()
             let name = notification as String
             MainActor.assumeIsolated { sensor.accessibilityNotified(name) }
         }
         var created: AXObserver?
         guard AXObserverCreate(pid, callback, &created) == .success, let created, let observedApp else { return }
         observer = created
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
         AXObserverAddNotification(created, observedApp, kAXFocusedWindowChangedNotification as CFString, refcon)
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .defaultMode)
+        // Common modes, so titles keep updating while the dropdown is open.
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes)
         watchFocusedWindowTitle()
     }
 
@@ -94,7 +115,6 @@ final class FocusSensor {
         }
         observedWindow = focusedWindow()
         if let observedWindow {
-            let refcon = Unmanaged.passUnretained(self).toOpaque()
             AXObserverAddNotification(observer, observedWindow, kAXTitleChangedNotification as CFString, refcon)
         }
     }
@@ -108,7 +128,13 @@ final class FocusSensor {
 
     private func stopObserving() {
         if let observer {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+            if let observedWindow {
+                AXObserverRemoveNotification(observer, observedWindow, kAXTitleChangedNotification as CFString)
+            }
+            if let observedApp {
+                AXObserverRemoveNotification(observer, observedApp, kAXFocusedWindowChangedNotification as CFString)
+            }
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
         observer = nil
         observedApp = nil

@@ -35,8 +35,8 @@ public final class SQLiteStore {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         lockDescriptor = open(url.path + ".lock", O_CREAT | O_RDWR, 0o600)
+        // Once every stored property is set, a throw still runs deinit, which releases the lock and the handle.
         guard lockDescriptor >= 0, flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0 else {
-            if lockDescriptor >= 0 { close(lockDescriptor) }
             throw Failure.alreadyOpenElsewhere(url)
         }
 
@@ -49,9 +49,11 @@ public final class SQLiteStore {
     }
 
     deinit {
-        sqlite3_close(db)
-        flock(lockDescriptor, LOCK_UN)
-        close(lockDescriptor)
+        sqlite3_close(db)  // Also frees the handle sqlite3_open returns on failure; nil is a no-op.
+        if lockDescriptor >= 0 {
+            flock(lockDescriptor, LOCK_UN)
+            close(lockDescriptor)
+        }
     }
 
     private func execute(_ sql: String) throws {
