@@ -170,9 +170,19 @@ extension SQLiteStore: AssistantStore {
             projects: try loadProjects(),
             tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
-            guardrailRules: readable([GuardrailRule].self,
-                                     try rows("SELECT key, json FROM settings WHERE key = '\(Self.guardrailKey)';", columns: 2))
-                .first ?? [])
+            guardrailRules: try loadGuardrailRules())
+    }
+
+    /// Dara's tier rules. Unlike other rows, unreadable rules fail the whole load: quietly falling
+    /// back to the defaults would loosen what Dara made stricter (ADR 0002).
+    private func loadGuardrailRules() throws -> [GuardrailRule] {
+        guard let row = try rows("SELECT key, json FROM settings;", columns: 2).first(where: { $0[0] == Self.guardrailKey })
+        else { return [] }
+        do {
+            return try JSONDecoder().decode([GuardrailRule].self, from: Data(row[1].utf8))
+        } catch {
+            throw Failure.sqlite("unreadable Guardrail rules: \(error)")
+        }
     }
 
     private static let guardrailKey = "guardrail_rules"

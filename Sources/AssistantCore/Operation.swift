@@ -47,7 +47,7 @@ public struct GuardrailRule: Equatable, Sendable, Codable {
 /// The rule placing each Operation in one tier. The helper enforces it, whoever starts the Operation.
 public struct Guardrail {
     /// A bulk edit of more Tasks than this asks first.
-    static let bulkEditAsksAbove = 5
+    public static let bulkEditAsksAbove = 5
 
     var rules: [GuardrailRule] = []
 

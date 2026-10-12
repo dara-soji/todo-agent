@@ -30,7 +30,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
             storeProblem: storeProblem)
         self.statusItem = statusItem
-        statusItem.currentMenuBar = { assistant.menuBar }
+        statusItem.currentMenuBar = {
+            assistant.expireDueAsks()
+            return assistant.menuBar
+        }
         StatusItemController.registerLoginItemOnFirstLaunch()
 
         let receive: (Signal) -> Void = { signal in
@@ -59,6 +62,11 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         windowSensor.start(delivering: receive)
         calendarSensor.start(delivering: receive)
         idleSensor.start(delivering: receive)
+    }
+
+    /// Quitting ends every conversation, so pending Asks are logged as expired, not run.
+    func applicationWillTerminate(_ notification: Notification) {
+        assistant?.expireAllAsks()
     }
 
     /// The local MCP server Claude Code talks to. If it can't start, the menu says why and

@@ -51,7 +51,7 @@ enum ToolCatalog {
         Spec(name: "get_now",
              description: "What Dara is doing now: the Project Now matched and why, the app, and the Committed Task. Window titles and URLs stay on the Mac.",
              input: object([:]),
-             output: result(["project": nullableObject, "evidence": nullableString, "app": nullableString,
+             output: output(["project": nullableObject, "evidence": nullableString, "app": nullableString,
                              "since": nullableString, "away": boolean, "committed_task": nullableObject]),
              kind: .read) { assistant, _ in
             let now = assistant.now
@@ -66,7 +66,7 @@ enum ToolCatalog {
         },
         Spec(name: "get_next", description: "The one Task the assistant recommends after Now, with its one-line reason.",
              input: object([:]),
-             output: result(["task": nullableObject, "reason": nullableString, "wont_fit_before": nullableString,
+             output: output(["task": nullableObject, "reason": nullableString, "wont_fit_before": nullableString,
                              "plan_tomorrow": boolean]),
              kind: .read) { assistant, _ in
             let next = assistant.next
@@ -83,7 +83,7 @@ enum ToolCatalog {
                  "project_id": uuid,
                  "include_deleted": boolean,
              ]),
-             output: result(["tasks": list]), kind: .read) { assistant, args in
+             output: output(["tasks": list]), kind: .read) { assistant, args in
             let statuses = try args.strings("status")
             if let unknown = statuses?.first(where: { !Shapes.statuses.contains($0) }) {
                 throw ToolError("Unknown status \(unknown).")
@@ -97,16 +97,16 @@ enum ToolCatalog {
             return ["tasks": .array(tasks.map(Shapes.task))]
         },
         Spec(name: "list_projects", description: "Every Project, active and archived, with its Matchers.",
-             input: object([:]), output: result(["projects": list]), kind: .read) { assistant, _ in
+             input: object([:]), output: output(["projects": list]), kind: .read) { assistant, _ in
             ["projects": .array(assistant.projects.map(Shapes.project))]
         },
         Spec(name: "get_calendar_today", description: "Today's calendar events still to come or under way.",
-             input: object([:]), output: result(["events": list]), kind: .read) { assistant, _ in
+             input: object([:]), output: output(["events": list]), kind: .read) { assistant, _ in
             ["events": .array(assistant.calendarToday.map(Shapes.event))]
         },
         Spec(name: "get_operation_log", description: "Recent Operations, newest first: what ran, its tier and who started it.",
              input: object(["limit": ["type": "integer", "minimum": 1, "maximum": .int(maxLogEntries)]]),
-             output: result(["entries": list]), kind: .read) { assistant, args in
+             output: output(["entries": list]), kind: .read) { assistant, args in
             let limit = try args.int("limit") ?? 20
             guard (1...maxLogEntries).contains(limit) else { throw ToolError("limit must be 1 to \(maxLogEntries).") }
             return ["entries": .array(assistant.operationLog.suffix(limit).reversed().map(Shapes.logEntry))]
@@ -127,12 +127,17 @@ enum ToolCatalog {
                  "kind": enumeration(Shapes.kinds),
                  "back_link": ["type": "string", "minLength": 1],
              ], required: ["title"]),
-             output: ran, kind: .operation(.addTask)) { assistant, args in
+             output: operationResult, kind: .operation(.addTask)) { assistant, args in
             let task = try assistant.addTask(TaskDraft(
                 title: try args.string("title") ?? "", backLink: try args.string("back_link"),
                 deadline: try args.date("deadline"), project: try args.projectID("project_id"),
                 effort: try args.effort("effort"), kind: try args.kind("kind")), by: .claudeCode)
-            return outcome(assistant, task: task.id)
+            // Created now, or held in an Ask until Dara confirms.
+            if let held = assistant.asks.last(where: { $0.writes(task.id) }) {
+                return result(assistant, .pending(held.id), task: task.id)
+            }
+            let entry = assistant.operationLog.last { $0.after.tasks.contains { $0.id == task.id } }
+            return result(assistant, entry.map { .ran($0.id) }, task: task.id)
         },
         Spec(name: "edit_task", description: "Change a Task's fields. Leave a field out to keep it; pass null to clear it.",
              input: object([
@@ -143,16 +148,16 @@ enum ToolCatalog {
                  "effort": nullable(enumeration(Shapes.efforts)),
                  "kind": nullable(enumeration(Shapes.kinds)),
              ], required: ["task_id"]),
-             output: ran, kind: .operation(.editTask)) { assistant, args in
+             output: operationResult, kind: .operation(.editTask)) { assistant, args in
             let id = try args.taskID()
-            try assistant.editTask(id, TaskChanges(
+            let outcome = try assistant.editTask(id, TaskChanges(
                 title: try args.string("title"), deadline: try args.clearable("deadline", args.date),
                 project: try args.clearable("project_id", args.projectID), effort: try args.clearable("effort", args.effort),
                 kind: try args.clearable("kind", args.kind)), by: .claudeCode)
-            return outcome(assistant, task: id)
+            return result(assistant, outcome, task: id)
         },
         Spec(name: "bulk_edit_tasks",
-             description: "Change the same fields on several Tasks. More than five asks Dara to confirm in the menu bar, with the Tasks listed.",
+             description: "Change the same fields on several Tasks. More than \(Guardrail.bulkEditAsksAbove) asks Dara to confirm in the menu bar, with the Tasks listed.",
              input: object([
                  "task_ids": ["type": "array", "items": uuid, "minItems": 1, "maxItems": 200],
                  "title": ["type": "string", "minLength": 1],
@@ -161,13 +166,13 @@ enum ToolCatalog {
                  "effort": nullable(enumeration(Shapes.efforts)),
                  "kind": nullable(enumeration(Shapes.kinds)),
              ], required: ["task_ids"]),
-             output: ran, kind: .operation(.bulkEditTasks)) { assistant, args in
+             output: operationResult, kind: .operation(.bulkEditTasks)) { assistant, args in
             let ids = try args.taskIDs("task_ids")
-            try assistant.editTasks(ids, TaskChanges(
+            let outcome = try assistant.editTasks(ids, TaskChanges(
                 title: try args.string("title"), deadline: try args.clearable("deadline", args.date),
                 project: try args.clearable("project_id", args.projectID), effort: try args.clearable("effort", args.effort),
                 kind: try args.clearable("kind", args.kind)), by: .claudeCode)
-            return outcome(assistant, task: nil)
+            return result(assistant, outcome, task: nil)
         },
         taskOperation("complete_task", "Mark a Task done, when Dara has asked for it.", .completeTask) {
             try $0.completeTask($1, by: .claudeCode)
@@ -180,13 +185,13 @@ enum ToolCatalog {
                  "hours": ["type": "number", "exclusiveMinimum": 0],
                  "waiting_on": ["type": "string", "minLength": 1],
              ], required: ["task_id"]),
-             output: ran, kind: .operation(.snoozeTask)) { assistant, args in
+             output: operationResult, kind: .operation(.snoozeTask)) { assistant, args in
             let id = try args.taskID()
             let note = try args.string("waiting_on")
             let wake = try args.date("until") ?? (try args.number("hours")).map { assistant.now(plusHours: $0) }
             guard wake != nil || note != nil else { throw ToolError("Give until, hours or waiting_on.") }
-            try assistant.snoozeTask(id, until: wake, note: note, by: .claudeCode)
-            return outcome(assistant, task: id)
+            let outcome = try assistant.snoozeTask(id, until: wake, note: note, by: .claudeCode)
+            return result(assistant, outcome, task: id)
         },
         taskOperation("drop_task", "Drop a Task: it stays in the list but out of play.", .dropTask) {
             try $0.dropTask($1, by: .claudeCode)
@@ -208,21 +213,20 @@ enum ToolCatalog {
     /// A tool that runs one Operation on one Task, named by task_id.
     private static func taskOperation(
         _ name: String, _ description: String, _ kind: OperationKind,
-        _ operation: @escaping @MainActor (Assistant, AssistantCore.Task.ID) throws -> Void
+        _ operation: @escaping @MainActor (Assistant, AssistantCore.Task.ID) throws -> Outcome
     ) -> Spec {
         Spec(name: name, description: description, input: object(["task_id": uuid], required: ["task_id"]),
-             output: ran, kind: .operation(kind)) { assistant, args in
+             output: operationResult, kind: .operation(kind)) { assistant, args in
             let id = try args.taskID()
-            try operation(assistant, id)
-            return outcome(assistant, task: id)
+            return result(assistant, try operation(assistant, id), task: id)
         }
     }
 
-    /// What came of the Operation just asked for: if it ran, the Task as it now is and the log entry
-    /// it wrote; if it waits for Dara, the Ask and when it expires, with the Task unchanged.
-    private static func outcome(_ assistant: Assistant, task id: AssistantCore.Task.ID?) -> Value {
+    /// What came of the Operation: if it ran, the Task as it now is and the log entry it wrote; if it
+    /// waits for Dara, the Ask and when it expires, with the Task unchanged.
+    private static func result(_ assistant: Assistant, _ outcome: Outcome?, task id: AssistantCore.Task.ID?) -> Value {
         let task = id.flatMap(assistant.task).map(Shapes.task) ?? .null
-        switch assistant.lastOutcome {
+        switch outcome {
         case let .pending(askID)?:
             let ask = assistant.asks.first { $0.id == askID }
             return ["status": "pending", "task": task, "log_entry": .null,
@@ -245,7 +249,7 @@ enum ToolCatalog {
     private static let nullableObject: Value = ["type": ["object", "null"]]
     private static let nullableString: Value = ["type": ["string", "null"]]
     /// Every Operation tool returns this shape: "ran", or "pending" until Dara confirms in the menu bar.
-    private static let ran = result([
+    private static let operationResult = output([
         "status": enumeration(["ran", "pending"]), "task": nullableObject, "log_entry": nullableObject,
         "ask_id": nullableString, "expires_at": nullableString,
     ])
@@ -256,7 +260,7 @@ enum ToolCatalog {
     }
 
     /// An output schema: every key is always present.
-    private static func result(_ properties: [String: Value]) -> Value {
+    private static func output(_ properties: [String: Value]) -> Value {
         object(properties, required: properties.keys.sorted())
     }
 

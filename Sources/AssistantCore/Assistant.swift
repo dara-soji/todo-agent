@@ -26,6 +26,8 @@ public final class Assistant {
         case cannotLoosen(OperationKind)
         /// Start Next with nothing to start.
         case nothingNext
+        /// A declined or expired entry ran nothing, so there is nothing to undo.
+        case notUndoable(LogEntry.ID)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -38,8 +40,6 @@ public final class Assistant {
     private var guardrail: Guardrail
     /// Operations waiting for Dara to confirm, oldest first.
     public private(set) var asks: [Ask] = []
-    /// What came of the latest Operation asked for, for adapters that report it.
-    public private(set) var lastOutcome: Outcome?
     /// The conversation the current call comes from; see `inSession`.
     private var session: String?
 
@@ -151,11 +151,17 @@ public final class Assistant {
         _ kind: OperationKind, _ summary: String, by startedBy: StartedBy, writing after: Change,
         undoes: LogEntry.ID? = nil, preview: [String] = []
     ) throws -> Outcome {
-        let projects = after.tasks.map(\.project) + after.projects.map { Optional($0.id) }
-        let tier = guardrail.tier(for: kind, projects: projects, size: after.tasks.count)
+        let before = currentVersions(of: after)
+        // Scope covers where things are and where they would go, so moving a Task out of a
+        // tightened Project, or into a loosened one, can't slip past the Guardrail.
+        let projects = Set((before.tasks + after.tasks).map(\.project) + after.projects.map { Optional($0.id) })
+        let tier = guardrail.tier(for: kind, projects: Array(projects), size: after.tasks.count)
         guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
+        let creates = Set(after.tasks.filter { tasksByID[$0.id] == nil }.map(\.id.rawValue)
+            + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue))
         let operation = Ask.Operation(
-            kind: kind, summary: summary, preview: preview, before: currentVersions(of: after), after: after, undoes: undoes)
+            kind: kind, summary: summary, preview: preview, before: before, after: after, undoes: undoes,
+            creates: creates)
         let outcome: Outcome
         switch tier {
         case .never:
@@ -167,7 +173,6 @@ public final class Assistant {
             try write(after, entries: [entry])
             outcome = .ran(entry.id)
         }
-        lastOutcome = outcome
         return outcome
     }
 
@@ -175,6 +180,7 @@ public final class Assistant {
     @discardableResult
     public func undo(_ id: LogEntry.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard let entry = operationLog.first(where: { $0.id == id }) else { throw Failure.unknownLogEntry(id) }
+        guard entry.confirmation != .declined, entry.confirmation != .expired else { throw Failure.notUndoable(id) }
         guard isCurrent(entry.after) else { throw Failure.changedSince(id) }
         return try perform(.undo, "Undid: \(entry.summary)", by: startedBy, writing: entry.before, undoes: id)
     }
@@ -186,7 +192,7 @@ public final class Assistant {
     public func confirmAsk(_ id: Ask.ID) throws -> Outcome {
         expireDueAsks()
         guard let ask = asks.first(where: { $0.id == id }) else { throw Failure.unknownAsk(id) }
-        guard ask.operations.allSatisfy({ isCurrent($0.before) }) else { throw Failure.askChangedSince(id) }
+        guard ask.operations.allSatisfy(isStillAsHeld) else { throw Failure.askChangedSince(id) }
         var change = Change()
         for operation in ask.operations {
             change.tasks += operation.after.tasks
@@ -199,9 +205,7 @@ public final class Assistant {
         }
         try write(change, entries: entries)
         asks.removeAll { $0.id == id }
-        let outcome = Outcome.ran(entries.last!.id)
-        lastOutcome = outcome
-        return outcome
+        return .ran(entries.last!.id)
     }
 
     /// Drops the Ask; nothing runs, and the log says so.
@@ -218,9 +222,16 @@ public final class Assistant {
         }
     }
 
-    /// Asks past their time expire, unrun.
-    func expireDueAsks() {
+    /// Asks past their time expire, unrun, logged at the moment they expired.
+    public func expireDueAsks() {
         for ask in asks where ask.expires <= clock.now {
+            try? close(ask, as: .expired, saying: "Expired, not run", at: ask.expires)
+        }
+    }
+
+    /// The helper is quitting: every conversation ends, so every Ask expires.
+    public func expireAllAsks() {
+        for ask in asks {
             try? close(ask, as: .expired, saying: "Expired, not run")
         }
     }
@@ -228,11 +239,10 @@ public final class Assistant {
     /// Holds an Operation for confirmation, joining a recent Ask from the same conversation when
     /// it touches nothing that Ask already will.
     private func hold(_ operation: Ask.Operation, startedBy: StartedBy) -> Ask.ID {
-        let touches = Set(operation.after.tasks.map(\.id.rawValue) + operation.after.projects.map(\.id.rawValue))
         if let session, let index = asks.lastIndex(where: { ask in
             ask.session == session && ask.startedBy == startedBy
                 && clock.now.timeIntervalSince(ask.created) <= Self.askGroupWindow
-                && ask.touches.isDisjoint(with: touches) && operation.after.guardrailRules == nil
+                && ask.touches.isDisjoint(with: operation.touches) && operation.after.guardrailRules == nil
         }) {
             asks[index].operations.append(operation)
             return asks[index].id
@@ -245,10 +255,10 @@ public final class Assistant {
     }
 
     /// Logs every Operation in the Ask as not run, then forgets it. A failed log write keeps it waiting.
-    private func close(_ ask: Ask, as confirmation: Confirmation, saying reason: String) throws {
+    private func close(_ ask: Ask, as confirmation: Confirmation, saying reason: String, at time: Date? = nil) throws {
         let entries = ask.operations.map { operation in
             LogEntry(
-                id: LogEntry.ID(), at: clock.now, kind: operation.kind, summary: "\(reason): \(operation.summary)",
+                id: LogEntry.ID(), at: time ?? clock.now, kind: operation.kind, summary: "\(reason): \(operation.summary)",
                 tier: .ask, startedBy: ask.startedBy, confirmation: confirmation, before: Change(), after: Change(),
                 undoes: nil)
         }
@@ -271,6 +281,18 @@ public final class Assistant {
         apply(change)
         operationLog += entries
         resolve(now.visit)
+    }
+
+    /// Whether what the Operation will overwrite is as it was when held: unchanged where it existed,
+    /// still absent where the Operation creates it.
+    private func isStillAsHeld(_ operation: Ask.Operation) -> Bool {
+        operation.before.tasks.allSatisfy { task in
+            operation.creates.contains(task.id.rawValue) ? tasksByID[task.id] == nil : tasksByID[task.id] == task
+        }
+            && operation.before.projects.allSatisfy { project in
+                operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
+            }
+            && (operation.before.guardrailRules.map { $0 == guardrail.rules } ?? true)
     }
 
     /// Whether everything in `change` is still exactly as it says.

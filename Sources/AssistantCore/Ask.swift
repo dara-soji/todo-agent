@@ -17,6 +17,13 @@ public struct Ask: Identifiable, Equatable, Sendable {
         let before: Change
         let after: Change
         let undoes: LogEntry.ID?
+        /// Ids of what this Operation creates: nothing by those ids may exist when it is confirmed.
+        let creates: Set<UUID>
+
+        /// The Task and Project ids it writes.
+        var touches: Set<UUID> {
+            Set(after.tasks.map(\.id.rawValue) + after.projects.map(\.id.rawValue))
+        }
     }
 
     public let id: ID
@@ -35,9 +42,14 @@ public struct Ask: Identifiable, Equatable, Sendable {
         operations.flatMap(\.preview)
     }
 
+    /// Whether one of its Operations writes this Task.
+    public func writes(_ task: Task.ID) -> Bool {
+        touches.contains(task.rawValue)
+    }
+
     /// The Task and Project ids its Operations write.
     var touches: Set<UUID> {
-        Set(operations.flatMap { $0.after.tasks.map(\.id.rawValue) + $0.after.projects.map(\.id.rawValue) })
+        operations.reduce(into: []) { $0.formUnion($1.touches) }
     }
 }
 

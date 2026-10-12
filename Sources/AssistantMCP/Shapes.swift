@@ -93,6 +93,7 @@ enum Shapes {
         case let .cannotTighten(kind): "\(kind.rawValue) can't be made stricter."
         case let .cannotLoosen(kind): "\(kind.rawValue) isn't an Ask Operation, so it can't be loosened."
         case .nothingNext: "There is no Next to start."
+        case let .notUndoable(id): "Log entry \(id.rawValue.uuidString) ran nothing, so there is nothing to undo."
         }
     }
 }

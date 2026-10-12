@@ -13,7 +13,8 @@ final class GuardrailsMenu: NSObject {
     }
 
     private static let names: [OperationKind: String] = [
-        .addTask: "Add a Task", .editTask: "Edit a Task", .bulkEditTasks: "Edit more than 5 Tasks",
+        .addTask: "Add a Task", .editTask: "Edit a Task",
+        .bulkEditTasks: "Edit more than \(Guardrail.bulkEditAsksAbove) Tasks",
         .commitTask: "Start a Task", .completeTask: "Mark a Task done", .snoozeTask: "Snooze a Task",
         .dropTask: "Drop a Task", .deleteTask: "Delete a Task", .restoreTask: "Restore a Task",
         .skipTask: "Skip Next", .keepTask: "Keep a skipped Task", .declareProject: "Declare a Project",
@@ -37,8 +38,11 @@ final class GuardrailsMenu: NSObject {
         let title = "\(Self.names[kind] ?? kind.rawValue) — \(label(assistant.tier(for: kind)))\(scoped)"
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let menu = NSMenu()
-        menu.addItem(choice("Ask first", .tighten, kind, nil))
-        menu.addItem(projectChoices("Ask first in", .tighten, kind))
+        // Ask first is offered only where it would change something.
+        if assistant.tier(for: kind) != .ask {
+            menu.addItem(choice("Ask first", .tighten, kind, nil))
+            menu.addItem(projectChoices("Ask first in", .tighten, kind))
+        }
         if Guardrail.canLoosen(kind) {
             menu.addItem(choice("Run without asking", .loosen, kind, nil))
             menu.addItem(projectChoices("Run without asking in", .loosen, kind))
@@ -54,7 +58,7 @@ final class GuardrailsMenu: NSObject {
         return item
     }
 
-    private func projectChoices(_ title: String, _ change: Change, _ kind: OperationKind) -> NSMenuItem {
+    private func projectChoices(_ title: String, _ change: RuleChange, _ kind: OperationKind) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let menu = NSMenu()
         let projects = assistant.projects.filter { $0.status == .active }
@@ -76,15 +80,15 @@ final class GuardrailsMenu: NSObject {
 
     // MARK: Menu handlers
 
-    private enum Change { case tighten, loosen, reset }
+    private enum RuleChange { case tighten, loosen, reset }
 
     private struct Choice {
-        let change: Change
+        let change: RuleChange
         let kind: OperationKind
         let project: Project.ID?
     }
 
-    private func choice(_ title: String, _ change: Change, _ kind: OperationKind, _ project: Project.ID?) -> NSMenuItem {
+    private func choice(_ title: String, _ change: RuleChange, _ kind: OperationKind, _ project: Project.ID?) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
         item.target = self
         item.representedObject = Choice(change: change, kind: kind, project: project)

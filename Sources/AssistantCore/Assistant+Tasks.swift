@@ -54,15 +54,8 @@ extension Assistant {
 
     @discardableResult
     public func editTask(_ id: Task.ID, _ changes: TaskChanges, by startedBy: StartedBy = .dara) throws -> Outcome {
-        let title = try changes.title.map { try Self.nonEmpty($0, else: .emptyTitle) }
-        if case let .some(project?) = changes.project, projectsByID[project] == nil { throw Failure.unknownProject(project) }
-        return try change(id, .editTask, "Edited", by: startedBy) { task in
-            if let title { task.title = title }
-            if let deadline = changes.deadline { task.deadline = deadline }
-            if let project = changes.project { task.project = project }
-            if let effort = changes.effort { task.effort = effort }
-            if let kind = changes.kind { task.kind = kind }
-        }
+        let changes = try validated(changes)
+        return try change(id, .editTask, "Edited", by: startedBy) { changes.apply(to: &$0) }
     }
 
     /// Makes the Task the Committed Task; the previous one goes back to open. As an interruption
@@ -152,7 +145,7 @@ extension Assistant {
 
     /// Choices waiting for Dara in the menu: Asks to confirm first, then Tasks skipped three times.
     public var decisions: [Decision] {
-        asks.map { .confirm($0.id) } + tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
+        asks.filter { $0.expires > clock.now }.map { .confirm($0.id) } + tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
     }
 
     /// Moves the Task to the Deleted list, where it can be restored. A committed Task stops being committed.
@@ -170,19 +163,16 @@ extension Assistant {
     /// Edits several Tasks at once. More than a few asks Dara first, with their titles as the preview.
     @discardableResult
     public func editTasks(_ ids: [Task.ID], _ changes: TaskChanges, by startedBy: StartedBy = .dara) throws -> Outcome {
-        let title = try changes.title.map { try Self.nonEmpty($0, else: .emptyTitle) }
-        if case let .some(project?) = changes.project, projectsByID[project] == nil { throw Failure.unknownProject(project) }
-        let edited = try ids.map { id in
-            var task = try existing(id)
-            if let title { task.title = title }
-            if let deadline = changes.deadline { task.deadline = deadline }
-            if let project = changes.project { task.project = project }
-            if let effort = changes.effort { task.effort = effort }
-            if let kind = changes.kind { task.kind = kind }
+        let changes = try validated(changes)
+        let current = try ids.map(existing)
+        let edited = current.map { task in
+            var task = task
+            changes.apply(to: &task)
             return task
         }
-        return try perform(.bulkEditTasks, "Edited \(ids.count) Tasks", by: startedBy, writing: Change(tasks: edited),
-                           preview: edited.map(\.title))
+        // The preview names the Tasks as they are now, so a bulk rename still shows which ones.
+        return try perform(.bulkEditTasks, "Edited \(ids.count) Tasks: \(changes.fieldNames.joined(separator: ", "))",
+                           by: startedBy, writing: Change(tasks: edited), preview: current.map(\.title))
     }
 
     /// Snoozed Tasks whose wake time has come go back to open, as Operations the helper starts.
@@ -217,6 +207,14 @@ extension Assistant {
         var task = try existing(id)
         edit(&task)
         return try perform(kind, "\(verb) “\(task.title)”", by: startedBy, writing: Change(tasks: [task]))
+    }
+
+    /// The changes with a trimmed, non-empty title and a Project that exists.
+    private func validated(_ changes: TaskChanges) throws -> TaskChanges {
+        var changes = changes
+        changes.title = try changes.title.map { try Self.nonEmpty($0, else: .emptyTitle) }
+        if case let .some(project?) = changes.project, projectsByID[project] == nil { throw Failure.unknownProject(project) }
+        return changes
     }
 
     private func existing(_ id: Task.ID) throws -> Task {

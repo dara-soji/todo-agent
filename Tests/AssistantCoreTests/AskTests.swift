@@ -22,7 +22,6 @@ import AssistantTestSupport
 
         let ask = try #require(assistant.asks.first)
         #expect(outcome == .pending(ask.id))
-        #expect(assistant.lastOutcome == .pending(ask.id))
         #expect(assistant.task(task.id)?.status == .open)
         #expect(ask.startedBy == .claudeCode)
         #expect(ask.summary == "Completed “Ship it”")
@@ -63,6 +62,35 @@ import AssistantTestSupport
         #expect(assistant.operationLog.last?.summary == "Not run: Completed “Ship it”")
     }
 
+    @Test func anAskThatCreatesSomethingCanBeConfirmed() throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.addTask)
+        try assistant.tighten(.declareProject)
+
+        let task = try assistant.quickAdd("New")
+        let project = try assistant.declareProject(name: "New Project", matchers: [])
+        #expect(assistant.task(task.id) == nil)
+        #expect(assistant.project(project.id) == nil)
+
+        for ask in assistant.asks { try assistant.confirmAsk(ask.id) }
+
+        #expect(assistant.task(task.id)?.title == "New")
+        #expect(assistant.project(project.id)?.name == "New Project")
+    }
+
+    @Test func anAskThatCreatesSomethingAlreadyCreatedSinceIsRefused() throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.restoreTask)
+        let task = try assistant.quickAdd("Gone")
+        try assistant.deleteTask(task.id)
+        try assistant.restoreTask(task.id)
+        let ask = try #require(assistant.asks.first)
+        try assistant.resetTier(.restoreTask)
+        try assistant.restoreTask(task.id)
+
+        #expect(throws: Assistant.Failure.askChangedSince(ask.id)) { try assistant.confirmAsk(ask.id) }
+    }
+
     @Test func anUnansweredAskExpiresAfterThirtyMinutes() throws {
         let assistant = makeAssistant()
         let task = try assistant.quickAdd("Ship it")
@@ -79,6 +107,44 @@ import AssistantTestSupport
         #expect(assistant.task(task.id)?.status == .open)
         #expect(assistant.operationLog.last?.confirmation == .expired)
         #expect(assistant.operationLog.last?.summary == "Expired, not run: Completed “Ship it”")
+    }
+
+    @Test func anExpiredAskLeavesTheMenuOnTimeAndIsLoggedWhenItExpired() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Ship it")
+        try assistant.tighten(.completeTask)
+        try assistant.completeTask(task.id)
+        let expires = try #require(assistant.asks.first).expires
+
+        clock.advance(minutes: 45)  // No Signal arrives.
+
+        #expect(assistant.decisions.isEmpty)
+        assistant.expireDueAsks()
+        #expect(assistant.asks.isEmpty)
+        #expect(assistant.operationLog.last?.at == expires)
+    }
+
+    @Test func quittingExpiresEveryPendingAsk() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Ship it")
+        try assistant.tighten(.completeTask)
+        try assistant.completeTask(task.id)
+
+        assistant.expireAllAsks()
+
+        #expect(assistant.asks.isEmpty)
+        #expect(assistant.operationLog.last?.confirmation == .expired)
+    }
+
+    @Test func aDeclinedOrExpiredEntryCannotBeUndone() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Ship it")
+        try assistant.tighten(.completeTask)
+        try assistant.completeTask(task.id)
+        try assistant.declineAsk(try #require(assistant.asks.first).id)
+        let declined = try #require(assistant.operationLog.last)
+
+        #expect(throws: Assistant.Failure.notUndoable(declined.id)) { try assistant.undo(declined.id) }
     }
 
     @Test func anExpiredAskCanNoLongerBeConfirmed() throws {
@@ -189,8 +255,18 @@ import AssistantTestSupport
 
         let ask = try #require(assistant.asks.first)
         #expect(assistant.tasks.allSatisfy { $0.kind == nil })
-        #expect(ask.summary == "Edited 6 Tasks")
+        #expect(ask.summary == "Edited 6 Tasks: kind")
         #expect(ask.preview == ["T1", "T2", "T3", "T4", "T5", "T6"])
+    }
+
+    @Test func aBulkRenamePreviewsTheTasksAsTheyAreNow() throws {
+        let assistant = makeAssistant()
+        let tasks = try (1...6).map { try assistant.quickAdd("T\($0)") }
+
+        try assistant.editTasks(tasks.map(\.id), TaskChanges(title: "Same", deadline: .some(nil)))
+
+        #expect(assistant.asks.first?.summary == "Edited 6 Tasks: title, deadline")
+        #expect(assistant.asks.first?.preview == ["T1", "T2", "T3", "T4", "T5", "T6"])
     }
 
     // MARK: Changing tiers
@@ -240,6 +316,30 @@ import AssistantTestSupport
 
         guard case .pending = try assistant.dropTask(inWork.id) else { Issue.record("should ask"); return }
         guard case .ran = try assistant.dropTask(elsewhere.id) else { Issue.record("should run"); return }
+    }
+
+    @Test func movingATaskOutOfATightenedProjectStillAsks() throws {
+        let assistant = makeAssistant()
+        let work = try assistant.declareProject(name: "Work", matchers: [])
+        let home = try assistant.declareProject(name: "Home", matchers: [])
+        let task = try assistant.addTask(TaskDraft(title: "W", project: work.id))
+        try assistant.tighten(.editTask, in: work.id)
+
+        guard case .pending = try assistant.editTask(task.id, TaskChanges(project: .some(home.id))) else {
+            Issue.record("moving out of Work should ask"); return
+        }
+        #expect(assistant.task(task.id)?.project == work.id)
+    }
+
+    @Test func movingTasksIntoALoosenedProjectStillAsks() throws {
+        let assistant = makeAssistant()
+        let course = try assistant.declareProject(name: "Course", matchers: [])
+        let others = try (1...6).map { try assistant.quickAdd("O\($0)") }
+        try assistant.loosen(.bulkEditTasks, in: course.id)
+
+        guard case .pending = try assistant.editTasks(others.map(\.id), TaskChanges(project: .some(course.id))) else {
+            Issue.record("Tasks from outside Course should ask"); return
+        }
     }
 
     @Test func everyTierChangeIsLoggedAndSurvivesARestart() throws {

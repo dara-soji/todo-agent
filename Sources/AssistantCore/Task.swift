@@ -120,6 +120,20 @@ public struct TaskDraft: Sendable {
 
 /// An edit to a Task's fields. A nil field is left alone; `.some(nil)` clears an optional one.
 public struct TaskChanges: Sendable {
+    func apply(to task: inout Task) {
+        if let title { task.title = title }
+        if let deadline { task.deadline = deadline }
+        if let project { task.project = project }
+        if let effort { task.effort = effort }
+        if let kind { task.kind = kind }
+    }
+
+    /// The fields it sets or clears, in order.
+    var fieldNames: [String] {
+        [("title", title != nil), ("deadline", deadline != nil), ("project", project != nil),
+         ("effort", effort != nil), ("kind", kind != nil)].filter(\.1).map(\.0)
+    }
+
     public var title: String?
     public var deadline: Date??
     public var project: Project.ID??
