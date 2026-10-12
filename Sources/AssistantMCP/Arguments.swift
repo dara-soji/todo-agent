@@ -51,6 +51,14 @@ struct Arguments {
         return AssistantCore.Task.ID(id)
     }
 
+    func taskIDs(_ key: String) throws -> [AssistantCore.Task.ID] {
+        guard let strings = try strings(key), !strings.isEmpty else { throw ToolError("\(key) needs at least one Task id.") }
+        return try strings.map { text in
+            guard let uuid = UUID(uuidString: text) else { throw ToolError("\(text) in \(key) is not a UUID.") }
+            return AssistantCore.Task.ID(uuid)
+        }
+    }
+
     func projectID(_ key: String) throws -> Project.ID? {
         try uuid(key).map(Project.ID.init)
     }

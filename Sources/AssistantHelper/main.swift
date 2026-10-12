@@ -25,10 +25,15 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 
         let projectsMenu = ProjectsMenu(assistant: assistant)
         let tasksMenu = TasksMenu(assistant: assistant)
+        let guardrailsMenu = GuardrailsMenu(assistant: assistant)
         let statusItem = StatusItemController(
-            showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, storeProblem: storeProblem)
+            showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
+            storeProblem: storeProblem)
         self.statusItem = statusItem
-        statusItem.currentMenuBar = { assistant.menuBar }
+        statusItem.currentMenuBar = {
+            assistant.expireDueAsks()
+            return assistant.menuBar
+        }
         StatusItemController.registerLoginItemOnFirstLaunch()
 
         let receive: (Signal) -> Void = { signal in
@@ -44,6 +49,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
         projectsMenu.onChange = changed
         tasksMenu.onChange = changed
+        guardrailsMenu.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
         startMCPServer(assistant, statusItem: statusItem, changed: changed)
@@ -56,6 +62,11 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         windowSensor.start(delivering: receive)
         calendarSensor.start(delivering: receive)
         idleSensor.start(delivering: receive)
+    }
+
+    /// Quitting ends every conversation, so pending Asks are logged as expired, not run.
+    func applicationWillTerminate(_ notification: Notification) {
+        assistant?.expireAllAsks()
     }
 
     /// The local MCP server Claude Code talks to. If it can't start, the menu says why and

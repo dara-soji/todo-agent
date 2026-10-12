@@ -31,6 +31,8 @@ public enum Next: Equatable, Sendable {
 
 /// Something waiting for Dara's choice in the menu. Decisions never pop up on their own.
 public enum Decision: Equatable, Sendable {
+    /// Operations waiting for Dara to confirm or decline.
+    case confirm(Ask.ID)
     /// Skipped three times: Snooze till tomorrow, Drop it, or Keep it.
     case skippedThreeTimes(Task.ID)
 }

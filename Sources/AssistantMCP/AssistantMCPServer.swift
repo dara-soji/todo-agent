@@ -50,7 +50,9 @@ public final class AssistantMCPServer {
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
-                channel.pipeline.configureHTTPServerPipeline().flatMap {
+                // No pipelining assistance: it stops reading while a response is in flight, so a client
+                // closing a long-lived event stream would never be noticed.
+                channel.pipeline.configureHTTPServerPipeline(withPipeliningAssistance: false).flatMap {
                     channel.pipeline.addHandler(HTTPHandler(router: router))
                 }
             }
@@ -120,6 +122,12 @@ private actor Router {
         return .error(statusCode: 400, .invalidRequest("Missing \(HTTPHeaderName.sessionID) header"))
     }
 
+    /// The client's standing event stream for a session dropped: the conversation has gone away,
+    /// even if it never sent DELETE.
+    func clientLeft(_ id: String) async {
+        await close(id)
+    }
+
     /// Sessions a conversation abandoned without saying goodbye.
     private func closeIdleSessions() async {
         let cutoff = Date().addingTimeInterval(-AssistantMCPServer.sessionIdleLimit)
@@ -146,7 +154,7 @@ private actor Router {
             ListTools.Result(tools: await tools.tools)
         }
         await server.withMethodHandler(CallTool.self) { params in
-            await tools.call(params.name, params.arguments ?? [:])
+            await tools.call(params.name, params.arguments ?? [:], session: id)
         }
         do {
             try await server.start(transport: transport)
@@ -160,8 +168,10 @@ private actor Router {
         return response
     }
 
+    /// Ends the conversation: its pending Asks expire unrun (ADR 0002).
     private func close(_ id: String) async {
         guard let session = sessions.removeValue(forKey: id) else { return }
+        await tools.endSession(id)
         await session.server.stop()
         await session.transport.disconnect()
     }
@@ -200,6 +210,8 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private var tooLarge = false
     /// Set when the client goes away, so a streaming response stops instead of writing into nothing.
     private let disconnected = NIOLockedValueBox(false)
+    /// The session whose standing event stream this connection carries, if any.
+    private let streamingSession = NIOLockedValueBox<String?>(nil)
 
     init(router: Router) {
         self.router = router
@@ -237,8 +249,14 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
     }
 
+    /// The socket closed. If it carried a session's standing event stream, the client has gone away
+    /// (e.g. Claude Code quit) even without a DELETE, so the conversation ends.
     func channelInactive(context: ChannelHandlerContext) {
         disconnected.withLockedValue { $0 = true }
+        if let session = streamingSession.withLockedValue({ $0 }) {
+            let router = router
+            _Concurrency.Task { await router.clientLeft(session) }
+        }
         context.fireChannelInactive()
     }
 
@@ -247,6 +265,12 @@ private final class HTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         let response = path == AssistantMCPServer.endpoint
             ? await router.handle(request)
             : .error(statusCode: 404, .invalidRequest("Not found"))
+        // A GET answered with a stream is the session's standing event stream.
+        if request.method.uppercased() == "GET", case .stream = response,
+           let session = request.header(HTTPHeaderName.sessionID) {
+            streamingSession.withLockedValue { $0 = session }
+            if disconnected.withLockedValue({ $0 }) { await router.clientLeft(session) }
+        }
         await write(response, version: head.version, context: context)
     }
 

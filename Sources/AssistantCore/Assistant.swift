@@ -17,8 +17,17 @@ public final class Assistant {
         case secondCommittedTask
         /// The Tasks or Projects an entry wrote have changed since, so undoing it would lose that change.
         case changedSince(LogEntry.ID)
-        /// The Guardrail placed the Operation in a tier this build can't run yet.
+        /// The Guardrail placed the Operation in a tier that can't run.
         case notAllowed(OperationKind, Tier)
+        case unknownAsk(Ask.ID)
+        /// Something the Ask would write has changed since it was made; decline it instead.
+        case askChangedSince(Ask.ID)
+        case cannotTighten(OperationKind)
+        case cannotLoosen(OperationKind)
+        /// Start Next with nothing to start.
+        case nothingNext
+        /// A declined or expired entry ran nothing, so there is nothing to undo.
+        case notUndoable(LogEntry.ID)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -28,7 +37,16 @@ public final class Assistant {
     /// For time of day and dates as Dara reads them.
     let calendar: Calendar
     private let store: AssistantStore
-    private let guardrail = Guardrail()
+    private var guardrail: Guardrail
+    /// Operations waiting for Dara to confirm, oldest first.
+    public private(set) var asks: [Ask] = []
+    /// The conversation the current call comes from; see `inSession`.
+    private var session: String?
+
+    /// How long an Ask waits before it expires.
+    static let askExpiresAfter: TimeInterval = 30 * 60
+    /// Asks from one conversation this close together are one confirm.
+    static let askGroupWindow: TimeInterval = 2 * 60
     let fitting: MatcherFitting
     // Readable across the module, written only here, by `apply`, so nothing skips the Guardrail and the log.
     private(set) var projectsByID: [Project.ID: Project]
@@ -54,6 +72,7 @@ public final class Assistant {
         self.projectsByID = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         self.tasksByID = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         self.operationLog = snapshot.log
+        self.guardrail = Guardrail(rules: snapshot.guardrailRules)
     }
 
     public func receive(_ signal: Signal) {
@@ -75,6 +94,7 @@ public final class Assistant {
             branches[repo] = branch
         }
         wakeSnoozedTasks()
+        expireDueAsks()
     }
 
     /// The checked-out branch of the repo a repo-path Matcher names, if it is watched.
@@ -105,39 +125,211 @@ public final class Assistant {
 
     // MARK: Operations
 
-    /// The Guardrail tier an Operation of this kind runs in, whoever starts it.
+    /// The Guardrail tier an Operation of this kind runs in, in general, whoever starts it.
     public func tier(for kind: OperationKind) -> Tier {
         guardrail.tier(for: kind)
     }
 
-    /// Runs an Operation through the Guardrail: stores what it writes together with its log entry,
-    /// then applies it. A failed store write changes nothing.
+    public var guardrailRules: [GuardrailRule] {
+        guardrail.rules
+    }
+
+    /// Runs `body` as part of a conversation, so Asks it makes group and expire with that conversation.
+    @discardableResult
+    public func inSession<T>(_ id: String?, _ body: () throws -> T) rethrows -> T {
+        let previous = session
+        session = id
+        defer { session = previous }
+        return try body()
+    }
+
+    /// Runs an Operation through the Guardrail. Auto: stores what it writes together with its log
+    /// entry, then applies it; a failed store write changes nothing. Ask: holds it for Dara to
+    /// confirm in the menu bar. Never: refuses.
     @discardableResult
     func perform(
         _ kind: OperationKind, _ summary: String, by startedBy: StartedBy, writing after: Change,
-        undoes: LogEntry.ID? = nil
-    ) throws -> LogEntry {
-        let tier = guardrail.tier(for: kind)
-        guard tier == .auto else { throw Failure.notAllowed(kind, tier) }
+        undoes: LogEntry.ID? = nil, preview: [String] = []
+    ) throws -> Outcome {
+        let before = currentVersions(of: after)
+        // Scope covers where things are and where they would go, so moving a Task out of a
+        // tightened Project, or into a loosened one, can't slip past the Guardrail.
+        let projects = Set((before.tasks + after.tasks).map(\.project) + after.projects.map { Optional($0.id) })
+        let tier = guardrail.tier(for: kind, projects: Array(projects), size: after.tasks.count)
         guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
-        let entry = LogEntry(
-            id: LogEntry.ID(), at: clock.now, kind: kind, summary: summary, tier: tier, startedBy: startedBy,
-            confirmation: .notNeeded, before: currentVersions(of: after), after: after, undoes: undoes)
-        try store.write(after, log: entry)
-        apply(after)
-        operationLog.append(entry)
-        resolve(now.visit)
-        return entry
+        let creates = Set(after.tasks.filter { tasksByID[$0.id] == nil }.map(\.id.rawValue)
+            + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue))
+        let operation = Ask.Operation(
+            kind: kind, summary: summary, preview: preview, before: before, after: after, undoes: undoes,
+            creates: creates)
+        let outcome: Outcome
+        switch tier {
+        case .never:
+            throw Failure.notAllowed(kind, tier)
+        case .ask:
+            outcome = .pending(hold(operation, startedBy: startedBy))
+        case .auto:
+            let entry = logEntry(for: operation, tier: .auto, startedBy: startedBy, confirmation: .notNeeded)
+            try write(after, entries: [entry])
+            outcome = .ran(entry.id)
+        }
+        return outcome
     }
 
     /// Reverses a logged Operation, as long as nothing it wrote has changed since.
     @discardableResult
-    public func undo(_ id: LogEntry.ID, by startedBy: StartedBy = .dara) throws -> LogEntry {
+    public func undo(_ id: LogEntry.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard let entry = operationLog.first(where: { $0.id == id }) else { throw Failure.unknownLogEntry(id) }
-        let unchanged = entry.after.tasks.allSatisfy { tasksByID[$0.id] == $0 }
-            && entry.after.projects.allSatisfy { projectsByID[$0.id] == $0 }
-        guard unchanged else { throw Failure.changedSince(id) }
+        guard entry.confirmation != .declined, entry.confirmation != .expired else { throw Failure.notUndoable(id) }
+        guard isCurrent(entry.after) else { throw Failure.changedSince(id) }
         return try perform(.undo, "Undid: \(entry.summary)", by: startedBy, writing: entry.before, undoes: id)
+    }
+
+    // MARK: Asks
+
+    /// Runs every Operation in the Ask, as long as nothing it would write has changed since.
+    @discardableResult
+    public func confirmAsk(_ id: Ask.ID) throws -> Outcome {
+        expireDueAsks()
+        guard let ask = asks.first(where: { $0.id == id }) else { throw Failure.unknownAsk(id) }
+        guard ask.operations.allSatisfy(isStillAsHeld) else { throw Failure.askChangedSince(id) }
+        var change = Change()
+        for operation in ask.operations {
+            change.tasks += operation.after.tasks
+            change.projects += operation.after.projects
+            if let rules = operation.after.guardrailRules { change.guardrailRules = rules }
+        }
+        guard committedCount(after: change) <= 1 else { throw Failure.secondCommittedTask }
+        let entries = ask.operations.map {
+            logEntry(for: $0, tier: .ask, startedBy: ask.startedBy, confirmation: .confirmed)
+        }
+        try write(change, entries: entries)
+        asks.removeAll { $0.id == id }
+        return .ran(entries.last!.id)
+    }
+
+    /// Drops the Ask; nothing runs, and the log says so.
+    public func declineAsk(_ id: Ask.ID) throws {
+        expireDueAsks()
+        guard let ask = asks.first(where: { $0.id == id }) else { throw Failure.unknownAsk(id) }
+        try close(ask, as: .declined, saying: "Not run")
+    }
+
+    /// The conversation ended: its Asks expire.
+    public func endSession(_ id: String) {
+        for ask in asks where ask.session == id {
+            try? close(ask, as: .expired, saying: "Expired, not run")
+        }
+    }
+
+    /// Asks past their time expire, unrun, logged at the moment they expired.
+    public func expireDueAsks() {
+        for ask in asks where ask.expires <= clock.now {
+            try? close(ask, as: .expired, saying: "Expired, not run", at: ask.expires)
+        }
+    }
+
+    /// The helper is quitting: every conversation ends, so every Ask expires.
+    public func expireAllAsks() {
+        for ask in asks {
+            try? close(ask, as: .expired, saying: "Expired, not run")
+        }
+    }
+
+    /// Holds an Operation for confirmation, joining a recent Ask from the same conversation when
+    /// it touches nothing that Ask already will.
+    private func hold(_ operation: Ask.Operation, startedBy: StartedBy) -> Ask.ID {
+        if let session, let index = asks.lastIndex(where: { ask in
+            ask.session == session && ask.startedBy == startedBy
+                && clock.now.timeIntervalSince(ask.created) <= Self.askGroupWindow
+                && ask.touches.isDisjoint(with: operation.touches) && operation.after.guardrailRules == nil
+        }) {
+            asks[index].operations.append(operation)
+            return asks[index].id
+        }
+        let ask = Ask(
+            id: Ask.ID(), startedBy: startedBy, session: session, created: clock.now,
+            expires: clock.now + Self.askExpiresAfter, operations: [operation])
+        asks.append(ask)
+        return ask.id
+    }
+
+    /// Logs every Operation in the Ask as not run, then forgets it. A failed log write keeps it waiting.
+    private func close(_ ask: Ask, as confirmation: Confirmation, saying reason: String, at time: Date? = nil) throws {
+        let entries = ask.operations.map { operation in
+            LogEntry(
+                id: LogEntry.ID(), at: time ?? clock.now, kind: operation.kind, summary: "\(reason): \(operation.summary)",
+                tier: .ask, startedBy: ask.startedBy, confirmation: confirmation, before: Change(), after: Change(),
+                undoes: nil)
+        }
+        try write(Change(), entries: entries)
+        asks.removeAll { $0.id == ask.id }
+    }
+
+    private func logEntry(
+        for operation: Ask.Operation, tier: Tier, startedBy: StartedBy, confirmation: Confirmation
+    ) -> LogEntry {
+        LogEntry(
+            id: LogEntry.ID(), at: clock.now, kind: operation.kind, summary: operation.summary, tier: tier,
+            startedBy: startedBy, confirmation: confirmation, before: operation.before, after: operation.after,
+            undoes: operation.undoes)
+    }
+
+    /// Stores the change and its log entries, then applies them. A failed store write changes nothing.
+    private func write(_ change: Change, entries: [LogEntry]) throws {
+        try store.write(change, log: entries)
+        apply(change)
+        operationLog += entries
+        resolve(now.visit)
+    }
+
+    /// Whether what the Operation will overwrite is as it was when held: unchanged where it existed,
+    /// still absent where the Operation creates it.
+    private func isStillAsHeld(_ operation: Ask.Operation) -> Bool {
+        operation.before.tasks.allSatisfy { task in
+            operation.creates.contains(task.id.rawValue) ? tasksByID[task.id] == nil : tasksByID[task.id] == task
+        }
+            && operation.before.projects.allSatisfy { project in
+                operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
+            }
+            && (operation.before.guardrailRules.map { $0 == guardrail.rules } ?? true)
+    }
+
+    /// Whether everything in `change` is still exactly as it says.
+    private func isCurrent(_ change: Change) -> Bool {
+        change.tasks.allSatisfy { tasksByID[$0.id] == $0 }
+            && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
+            && (change.guardrailRules.map { $0 == guardrail.rules } ?? true)
+    }
+
+    // MARK: Tiers
+
+    /// Makes an Operation ask first, everywhere or only for one Project.
+    @discardableResult
+    public func tighten(_ kind: OperationKind, in project: Project.ID? = nil) throws -> Outcome {
+        guard Guardrail.canTighten(kind) else { throw Failure.cannotTighten(kind) }
+        return try setRule(GuardrailRule(kind: kind, project: project, tier: .ask), "Ask first for \(kind.rawValue)")
+    }
+
+    /// Lets an Ask Operation run without asking, for that Operation only and optionally one Project.
+    @discardableResult
+    public func loosen(_ kind: OperationKind, in project: Project.ID? = nil) throws -> Outcome {
+        guard Guardrail.canLoosen(kind) else { throw Failure.cannotLoosen(kind) }
+        return try setRule(GuardrailRule(kind: kind, project: project, tier: .auto), "Run \(kind.rawValue) without asking")
+    }
+
+    /// Back to the default tier for that Operation and scope.
+    @discardableResult
+    public func resetTier(_ kind: OperationKind, in project: Project.ID? = nil) throws -> Outcome {
+        let rules = guardrail.rules.filter { !($0.kind == kind && $0.project == project) }
+        return try perform(.changeGuardrail, "Default tier for \(kind.rawValue)", by: .dara,
+                           writing: Change(guardrailRules: rules))
+    }
+
+    private func setRule(_ rule: GuardrailRule, _ summary: String) throws -> Outcome {
+        let scope = rule.project.flatMap(project).map { " in \($0.name)" } ?? ""
+        let rules = guardrail.rules.filter { !($0.kind == rule.kind && $0.project == rule.project) } + [rule]
+        return try perform(.changeGuardrail, summary + scope, by: .dara, writing: Change(guardrailRules: rules))
     }
 
     /// What `change` will overwrite. Something new is recorded as it would be after an undo:
@@ -145,7 +337,8 @@ public final class Assistant {
     private func currentVersions(of change: Change) -> Change {
         Change(
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
-            projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() })
+            projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() },
+            guardrailRules: change.guardrailRules.map { _ in guardrail.rules })
     }
 
     /// How many Tasks in play would be committed once `change` is written.
@@ -163,6 +356,7 @@ public final class Assistant {
     }
 
     private func apply(_ change: Change) {
+        if let rules = change.guardrailRules { guardrail.rules = rules }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }

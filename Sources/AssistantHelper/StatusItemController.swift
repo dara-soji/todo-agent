@@ -11,6 +11,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let storeProblem: String?
     private let projectsMenu: ProjectsMenu
     private let tasksMenu: TasksMenu
+    private let guardrailsMenu: GuardrailsMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
@@ -18,10 +19,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// The latest state, read whenever the dropdown opens: Next can change with time alone.
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
-    init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, storeProblem: String?) {
+    init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, guardrailsMenu: GuardrailsMenu,
+         storeProblem: String?) {
         self.menuBar = menuBar
         self.projectsMenu = projectsMenu
         self.tasksMenu = tasksMenu
+        self.guardrailsMenu = guardrailsMenu
         self.storeProblem = storeProblem
         super.init()
         menu.delegate = self
@@ -85,6 +88,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(tasksMenu.tasksItem())
         if let deleted = tasksMenu.deletedItem() { menu.addItem(deleted) }
         menu.addItem(projectsMenu.item())
+        menu.addItem(guardrailsMenu.item())
 
         let permissions = [
             ActiveWindowSensor.hasAccessibility ? nil

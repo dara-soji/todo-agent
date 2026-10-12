@@ -21,16 +21,22 @@ public final class AssistantTools {
     /// The tool's result as MCP returns it: structured, and as JSON text for clients that only
     /// read text. A bad call or a refused Operation is a tool error, with a message Claude can
     /// read, and changes nothing.
-    func call(_ name: String, _ arguments: [String: Value]) -> CallTool.Result {
+    func call(_ name: String, _ arguments: [String: Value], session: String? = nil) -> CallTool.Result {
         do {
             guard let spec = ToolCatalog.spec(named: name) else { throw ToolError("Unknown tool \(name).") }
-            let result = try spec.run(assistant, Arguments(arguments))
+            let result = try assistant.inSession(session) { try spec.run(assistant, Arguments(arguments)) }
             if case .operation = spec.kind { onChange() }
             return try CallTool.Result(
                 content: [.text(text: Self.json(result), annotations: nil, _meta: nil)], structuredContent: result)
         } catch {
             return CallTool.Result(content: [.text(text: Self.describe(error), annotations: nil, _meta: nil)], isError: true)
         }
+    }
+
+    /// The conversation ended: Asks it started expire unrun.
+    func endSession(_ id: String) {
+        assistant.endSession(id)
+        onChange()
     }
 
     private static func json(_ value: Value) -> String {

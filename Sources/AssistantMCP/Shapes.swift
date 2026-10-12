@@ -88,6 +88,12 @@ enum Shapes {
         case .secondCommittedTask: "That would leave two Committed Tasks."
         case let .changedSince(id): "Log entry \(id.rawValue.uuidString) can't be undone: things changed since."
         case let .notAllowed(kind, tier): "\(kind.rawValue) is \(tier.rawValue) and can't run here."
+        case let .unknownAsk(id): "No pending Ask \(id.rawValue.uuidString)."
+        case let .askChangedSince(id): "Ask \(id.rawValue.uuidString) can't run: things changed since."
+        case let .cannotTighten(kind): "\(kind.rawValue) can't be made stricter."
+        case let .cannotLoosen(kind): "\(kind.rawValue) isn't an Ask Operation, so it can't be loosened."
+        case .nothingNext: "There is no Next to start."
+        case let .notUndoable(id): "Log entry \(id.rawValue.uuidString) ran nothing, so there is nothing to undo."
         }
     }
 }
