@@ -1,5 +1,6 @@
 import AppKit
 import AssistantCore
+import AssistantMCP
 import AssistantPersistence
 
 /// Wires the OS adapters to the core. Everything the assistant decides happens in AssistantCore.
@@ -14,6 +15,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var idleSensor: IdleSensor?
     private var gitWatcher: GitWatcher?
     private var hotKey: HotKey?
+    private var mcpServer: AssistantMCPServer?
     private let quickAdd = QuickAddPanel()
     private let added = AddedPanel()
 
@@ -44,6 +46,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         tasksMenu.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
+        startMCPServer(assistant, statusItem: statusItem, changed: changed)
 
         _ = ActiveWindowSensor.requestAccessibility()
         let windowSensor = ActiveWindowSensor()
@@ -53,6 +56,30 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         windowSensor.start(delivering: receive)
         calendarSensor.start(delivering: receive)
         idleSensor.start(delivering: receive)
+    }
+
+    /// The local MCP server Claude Code talks to. If it can't start, the menu says why and
+    /// everything else keeps working.
+    private func startMCPServer(_ assistant: Assistant, statusItem: StatusItemController, changed: @escaping () -> Void) {
+        let token: String
+        let server: AssistantMCPServer
+        do {
+            token = try MCPToken.loadOrCreate()
+            server = try AssistantMCPServer(assistant: assistant, token: token)
+        } catch {
+            statusItem.claudeCode = .unavailable("\(error)")
+            return
+        }
+        server.tools.onChange = changed
+        mcpServer = server
+        _Concurrency.Task {
+            do {
+                let port = try await server.start()
+                statusItem.claudeCode = .ready(command: ClaudeCodeConnection.command(port: port, token: token))
+            } catch {
+                statusItem.claudeCode = .unavailable("\(error)")
+            }
+        }
     }
 
     private func setUpQuickAdd(_ assistant: Assistant, changed: @escaping () -> Void) {

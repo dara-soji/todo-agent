@@ -9,8 +9,12 @@ BIN="$(swift build -c release --show-bin-path)/AssistantHelper"
 APP=.build/AssistantHelper.app
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AssistantHelper"
+# Dependencies' resource bundles (e.g. NIO's privacy manifest) go where Bundle.module looks.
+for bundle in "$(dirname "$BIN")"/*.bundle; do
+    [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"
+done
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
