@@ -45,9 +45,9 @@ extension Assistant {
 
     private func newTask(_ draft: TaskDraft) throws -> Task {
         Task(
-            id: Task.ID(), title: try Self.nonEmpty(draft.title, else: .emptyTitle), source: draft.source, backLink: draft.backLink,
-            status: .open, created: clock.now, deadline: draft.deadline, project: draft.project,
-            effort: draft.effort, kind: draft.kind, resumeAfterInterruption: false, deletedAt: nil)
+            id: Task.ID(), title: try Self.nonEmpty(draft.title, else: .emptyTitle), source: draft.source,
+            backLink: draft.backLink, status: .open, created: clock.now, deadline: draft.deadline,
+            project: draft.project, effort: draft.effort, kind: draft.kind)
     }
 
     // MARK: Changing
@@ -81,11 +81,68 @@ extension Assistant {
 
     /// Snoozes until `until`, or with no wake time when waiting on someone (say who in `note`).
     public func snoozeTask(_ id: Task.ID, until: Date?, note: String? = nil, by startedBy: StartedBy = .dara) throws {
-        try change(id, .snoozeTask, "Snoozed", by: startedBy) { $0.status = .snoozed(until: until, note: note) }
+        try change(id, .snoozeTask, "Snoozed", by: startedBy) {
+            $0.status = .snoozed(until: until, note: note)
+            $0.clearSkips()
+        }
+    }
+
+    public func snoozeTask(_ id: Task.ID, forHours hours: Double, by startedBy: StartedBy = .dara) throws {
+        try snoozeTask(id, until: clock.now + hours * 60 * 60, by: startedBy)
+    }
+
+    /// Snoozes until 9:00 tomorrow.
+    public func snoozeTillTomorrow(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: clock.now))!
+        try snoozeTask(id, until: calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!, by: startedBy)
     }
 
     public func dropTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .dropTask, "Dropped", by: startedBy) { $0.status = .dropped }
+        try change(id, .dropTask, "Dropped", by: startedBy) {
+            $0.status = .dropped
+            $0.clearSkips()
+        }
+    }
+
+    // MARK: Next
+
+    /// The one Task to do after Now, chosen by rule. Suggestions never feed it.
+    public var next: Next {
+        let open = tasks.filter { $0.status == .open }
+        return NextRule(now: clock.now, calendar: calendar, currentProject: now.project, events: calendarEvents)
+            .choose(from: open)
+    }
+
+    /// Accepts Next: it becomes the Committed Task.
+    public func startNext(by startedBy: StartedBy = .dara) throws {
+        guard let id = next.task else { return }
+        try commitTask(id, by: startedBy)
+    }
+
+    /// Takes the Task out of Next for two hours. The third skip asks Dara what to do with it.
+    public func skipTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+        guard try existing(id).status == .open else { throw Failure.notOpen(id) }
+        let until = clock.now + Self.skipFor
+        try change(id, .skipTask, "Skipped", by: startedBy) {
+            $0.skippedUntil = until
+            $0.skipCount += 1
+        }
+    }
+
+    /// Dara's "Keep it" for a Task skipped three times: its skips start over, though it still sits
+    /// out the skip just made.
+    public func keepTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+        try change(id, .keepTask, "Kept", by: startedBy) { $0.skipCount = 0 }
+    }
+
+    /// How long Skip keeps a Task out of Next.
+    static let skipFor: TimeInterval = 2 * 60 * 60
+    /// The skip that asks what to do.
+    static let skipsBeforeAsking = 3
+
+    /// Choices waiting for Dara in the menu.
+    public var decisions: [Decision] {
+        tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
     }
 
     /// Moves the Task to the Deleted list, where it can be restored. A committed Task stops being committed.
@@ -153,6 +210,11 @@ extension Task.Status {
 }
 
 extension Task {
+    mutating func clearSkips() {
+        skippedUntil = nil
+        skipCount = 0
+    }
+
     /// The Task as it sits in the Deleted list. A committed Task stops being committed.
     func deleted(at time: Date) -> Task {
         var task = self

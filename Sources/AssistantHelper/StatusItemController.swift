@@ -13,6 +13,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let tasksMenu: TasksMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
+    /// The latest state, read whenever the dropdown opens: Next can change with time alone.
+    var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
     init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, storeProblem: String?) {
         self.menuBar = menuBar
@@ -43,12 +45,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             break
         }
         title.append(NSAttributedString(string: menuBar.title, attributes: text))
+        if menuBar.decisionsWaiting {
+            title.append(NSAttributedString(string: " ●", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(9)]))
+        }
         statusItem.button?.attributedTitle = title
     }
 
     // Built when opened so it always reflects the latest state.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        render(currentMenuBar())
+
+        let decisions = tasksMenu.decisionItems()
+        if !decisions.isEmpty {
+            decisions.forEach(menu.addItem)
+            menu.addItem(.separator())
+        }
 
         menu.addItem(header("Now"))
         if let committed = menuBar.committedTaskTitle { menu.addItem(detail(committed)) }
@@ -56,6 +68,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if let evidence = menuBar.evidence { menu.addItem(metadata(evidence)) }
         if let window = menuBar.window { menu.addItem(metadata(window)) }
         if let markDone = tasksMenu.markDoneItem() { menu.addItem(markDone) }
+
+        menu.addItem(.separator())
+        menu.addItem(header("Next"))
+        menu.addItem(nextTitle(menuBar.nextTitle))
+        if let reason = menuBar.nextReason { menu.addItem(metadata(reason)) }
+        tasksMenu.nextItems().forEach(menu.addItem)
 
         menu.addItem(.separator())
         let addTask = action("Add task…", #selector(addTask))
@@ -98,6 +116,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func detail(_ text: String) -> NSMenuItem {
         let item = NSMenuItem()
         item.attributedTitle = NSAttributedString(string: text, attributes: [.font: Theme.display(13)])
+        item.isEnabled = false
+        return item
+    }
+
+    private func nextTitle(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: Theme.display(13), .foregroundColor: Theme.accent,
+        ])
         item.isEnabled = false
         return item
     }

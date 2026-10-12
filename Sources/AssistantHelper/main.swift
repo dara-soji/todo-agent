@@ -26,6 +26,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let statusItem = StatusItemController(
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
+        statusItem.currentMenuBar = { assistant.menuBar }
         StatusItemController.registerLoginItemOnFirstLaunch()
 
         let receive: (Signal) -> Void = { signal in
