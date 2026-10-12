@@ -7,7 +7,7 @@ import AssistantCore
     let code = App(bundleID: "com.microsoft.VSCode", name: "Code")
 
     func makeAssistant() -> Assistant {
-        try! Assistant(clock: clock, projects: InMemoryProjectStore(), homeDirectory: "/Users/dara")
+        try! Assistant(clock: clock, store: InMemoryStore(), homeDirectory: "/Users/dara")
     }
 
     @Test func showsADashBeforeAnySignal() {
@@ -56,5 +56,14 @@ import AssistantCore
         assistant.receive(.activeWindow(app: code, windowTitle: nil, url: URL(string: "https://docs.google.com/spreadsheets/d/abc/edit")))
 
         #expect(assistant.menuBar.title == "SPREADSHEET OF…")
+    }
+
+    @Test func dropdownShowsTheCommittedTaskUnderNow() throws {
+        let assistant = makeAssistant()
+        #expect(assistant.menuBar.committedTaskTitle == nil)
+
+        try assistant.quickAdd("Write the quick-add palette", start: true)
+
+        #expect(assistant.menuBar.committedTaskTitle == "Write the quick-add palette")
     }
 }

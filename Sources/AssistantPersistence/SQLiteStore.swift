@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 3
+    static let schemaVersion = 4
 
     public let url: URL
     private var db: OpaquePointer?
@@ -82,6 +82,14 @@ public final class SQLiteStore {
                     INSERT INTO matchers_v3 SELECT project_id, position, kind, pattern FROM matchers;
                     DROP TABLE matchers;
                     ALTER TABLE matchers_v3 RENAME TO matchers;
+                    """)
+            }
+            if stored < 4 {
+                // Tasks and log entries are stored whole, as JSON, keyed for lookup.
+                try run("""
+                    CREATE TABLE tasks (id TEXT PRIMARY KEY, json TEXT NOT NULL);
+                    CREATE TABLE operation_log (id TEXT PRIMARY KEY, at REAL NOT NULL, json TEXT NOT NULL);
+                    CREATE INDEX operation_log_at ON operation_log (at);
                     """)
             }
             try execute("""
@@ -150,8 +158,36 @@ public final class SQLiteStore {
     }
 }
 
-extension SQLiteStore: ProjectStore {
-    public func loadProjects() throws -> [Project] {
+extension SQLiteStore: AssistantStore {
+    /// Everything stored. A row that can't be read is logged and skipped rather than taking the whole
+    /// store down; the rest stays usable and persisted.
+    public func load() throws -> StoreSnapshot {
+        StoreSnapshot(
+            projects: try loadProjects(),
+            tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
+            log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)))
+    }
+
+    public func write(_ change: Change, log entry: LogEntry) throws {
+        try run("BEGIN IMMEDIATE;")
+        do {
+            for project in change.projects { try upsert(project) }
+            for task in change.tasks {
+                try execute("""
+                    INSERT INTO tasks (id, json) VALUES (?, ?)
+                    ON CONFLICT(id) DO UPDATE SET json = excluded.json;
+                    """, task.id.rawValue.uuidString, try encode(task))
+            }
+            try execute("INSERT INTO operation_log (id, at, json) VALUES (?, ?, ?);",
+                        entry.id.rawValue.uuidString, String(entry.at.timeIntervalSinceReferenceDate), try encode(entry))
+            try run("COMMIT;")
+        } catch {
+            try? run("ROLLBACK;")
+            throw error
+        }
+    }
+
+    private func loadProjects() throws -> [Project] {
         let matchers = try rows("SELECT project_id, kind, pattern FROM matchers ORDER BY project_id, position;", columns: 3)
         let byProject = Dictionary(grouping: matchers, by: { $0[0] })
         return try rows("SELECT id, name, short_name, status FROM projects;", columns: 4).map { row in
@@ -166,23 +202,33 @@ extension SQLiteStore: ProjectStore {
         }
     }
 
-    public func save(_ project: Project) throws {
+    /// Inside the caller's transaction.
+    private func upsert(_ project: Project) throws {
         let id = project.id.rawValue.uuidString
-        try run("BEGIN IMMEDIATE;")
-        do {
-            try execute("""
-                INSERT INTO projects (id, name, short_name, status) VALUES (?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name, status = excluded.status;
-                """, id, project.name, project.shortName, project.status.rawValue)
-            try execute("DELETE FROM matchers WHERE project_id = ?;", id)
-            for (position, matcher) in project.matchers.enumerated() {
-                try execute("INSERT INTO matchers (project_id, position, kind, pattern) VALUES (?, ?, ?, ?);",
-                            id, String(position), matcher.kind.rawValue, matcher.pattern)
+        try execute("""
+            INSERT INTO projects (id, name, short_name, status) VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name, short_name = excluded.short_name, status = excluded.status;
+            """, id, project.name, project.shortName, project.status.rawValue)
+        try execute("DELETE FROM matchers WHERE project_id = ?;", id)
+        for (position, matcher) in project.matchers.enumerated() {
+            try execute("INSERT INTO matchers (project_id, position, kind, pattern) VALUES (?, ?, ?, ?);",
+                        id, String(position), matcher.kind.rawValue, matcher.pattern)
+        }
+    }
+
+    private func encode<T: Encodable>(_ value: T) throws -> String {
+        String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+    }
+
+    /// Decodes each (id, json) row, skipping and logging any that can't be read.
+    private func readable<T: Decodable>(_ type: T.Type, _ rows: [[String]]) -> [T] {
+        rows.compactMap { row in
+            do {
+                return try JSONDecoder().decode(type, from: Data(row[1].utf8))
+            } catch {
+                NSLog("TodoAgent: skipped unreadable \(T.self) \(row[0]): \(error)")
+                return nil
             }
-            try run("COMMIT;")
-        } catch {
-            try? run("ROLLBACK;")
-            throw error
         }
     }
 }

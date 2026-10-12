@@ -20,11 +20,14 @@ public struct MenuBar: Equatable, Sendable {
     public let evidence: String?
     /// The app and full window title, never shortened.
     public let window: String?
+    /// The Committed Task's title, shown under Now.
+    public let committedTaskTitle: String?
 
     /// Longest menu-bar title, ellipsis included.
     static let titleLimit = 15
 
-    init(_ now: Now, project: Project?, branch: String?) {
+    init(_ now: Now, project: Project?, branch: String?, committedTask: Task?) {
+        self.committedTaskTitle = committedTask?.title
         guard now.window != nil || now.match != nil else {
             title = "—"
             marker = .unknown
@@ -69,6 +72,6 @@ public struct MenuBar: Equatable, Sendable {
 
 extension Assistant {
     public var menuBar: MenuBar {
-        MenuBar(now, project: now.project.flatMap(project), branch: now.evidence.flatMap(branch(of:)))
+        MenuBar(now, project: now.project.flatMap(project), branch: now.evidence.flatMap(branch(of:)), committedTask: committedTask)
     }
 }

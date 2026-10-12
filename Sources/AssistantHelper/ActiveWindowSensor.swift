@@ -53,7 +53,8 @@ final class ActiveWindowSensor: SignalSource {
     }
 
     private func frontmostChanged(to app: NSRunningApplication?) {
-        guard let app else { return }
+        // The helper's own panels (quick-add, alerts) are never what Dara is working on.
+        guard let app, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
         frontmost = app
         observe(pid: app.processIdentifier)
         report()

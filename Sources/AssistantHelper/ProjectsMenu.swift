@@ -15,7 +15,7 @@ final class ProjectsMenu: NSObject {
     func item() -> NSMenuItem {
         let root = NSMenuItem(title: "Projects", action: nil, keyEquivalent: "")
         let menu = NSMenu()
-        menu.addItem(action("New Project…", #selector(newProject)))
+        menu.addItem(menuItem("New Project…", #selector(newProject)))
         if !assistant.projects.isEmpty { menu.addItem(.separator()) }
         for project in assistant.projects {
             menu.addItem(projectItem(project))
@@ -28,28 +28,28 @@ final class ProjectsMenu: NSObject {
         let title = project.status == .archived ? "\(project.name) (archived)" : project.name
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         let menu = NSMenu()
-        menu.addItem(action("Rename…", #selector(rename(_:)), project))
-        menu.addItem(action("Add Matcher…", #selector(addMatcher(_:)), project))
+        menu.addItem(menuItem("Rename…", #selector(rename(_:)), project))
+        menu.addItem(menuItem("Add Matcher…", #selector(addMatcher(_:)), project))
         if !project.matchers.isEmpty {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Remove Matcher", action: nil, keyEquivalent: "").isEnabled = false
             for matcher in project.matchers {
-                let remove = action(MatcherText.format(matcher), #selector(removeMatcher(_:)), (project.id, matcher))
+                let remove = menuItem(MatcherText.format(matcher), #selector(removeMatcher(_:)), (project.id, matcher))
                 remove.indentationLevel = 1
                 menu.addItem(remove)
             }
         }
         menu.addItem(.separator())
         if project.status == .archived {
-            menu.addItem(action("Restore", #selector(restore(_:)), project))
+            menu.addItem(menuItem("Restore", #selector(restore(_:)), project))
         } else {
-            menu.addItem(action("Archive", #selector(archive(_:)), project))
+            menu.addItem(menuItem("Archive", #selector(archive(_:)), project))
         }
         item.submenu = menu
         return item
     }
 
-    // MARK: Actions
+    // MARK: Menu handlers
 
     @objc private func newProject() {
         guard let answers = ask("New Project", fields: [
@@ -92,29 +92,17 @@ final class ProjectsMenu: NSObject {
     // MARK: Helpers
 
     private func attempt(_ change: () throws -> Void) {
-        do {
-            try change()
-        } catch let invalid as Matcher.Invalid {
-            let message = switch invalid {
-            case let .bareDomain(prefix): "“\(prefix)” is a bare domain. Add a path, e.g. \(prefix)/your-project."
-            case let .relativePath(path): "“\(path)” isn't a full path. Start it with ~/ or /."
-            case let .shortKeyword(keyword): "“\(keyword)” is too short for a calendar keyword."
-            }
-            alert(message)
-        } catch Assistant.Failure.emptyName {
-            alert("A Project needs a name.")
-        } catch {
-            alert("\(error)")
-        }
-        onChange()
+        Attempt.run("Couldn't save the Project", explaining: Self.explain, then: onChange, change)
     }
 
-    private func alert(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = "Couldn't save the Project"
-        alert.informativeText = message
-        NSApp.activate()
-        alert.runModal()
+    private static func explain(_ error: Error) -> String {
+        switch error {
+        case Matcher.Invalid.bareDomain(let prefix): "“\(prefix)” is a bare domain. Add a path, e.g. \(prefix)/your-project."
+        case Matcher.Invalid.relativePath(let path): "“\(path)” isn't a full path. Start it with ~/ or /."
+        case Matcher.Invalid.shortKeyword(let keyword): "“\(keyword)” is too short for a calendar keyword."
+        case Assistant.Failure.emptyName: "A Project needs a name."
+        default: "\(error)"
+        }
     }
 
     /// A small form; nil when cancelled.
@@ -145,7 +133,7 @@ final class ProjectsMenu: NSObject {
         return inputs.map { $0.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
-    private func action(_ title: String, _ selector: Selector, _ object: Any? = nil) -> NSMenuItem {
+    private func menuItem(_ title: String, _ selector: Selector, _ object: Any? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
         item.representedObject = object

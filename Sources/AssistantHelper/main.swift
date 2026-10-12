@@ -13,13 +13,18 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var calendarSensor: CalendarSensor?
     private var idleSensor: IdleSensor?
     private var gitWatcher: GitWatcher?
+    private var hotKey: HotKey?
+    private let quickAdd = QuickAddPanel()
+    private let added = AddedPanel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
         self.assistant = assistant
 
         let projectsMenu = ProjectsMenu(assistant: assistant)
-        let statusItem = StatusItemController(showing: assistant.menuBar, projectsMenu: projectsMenu, storeProblem: storeProblem)
+        let tasksMenu = TasksMenu(assistant: assistant)
+        let statusItem = StatusItemController(
+            showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
         StatusItemController.registerLoginItemOnFirstLaunch()
 
@@ -30,10 +35,14 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
         gitWatcher.watch(assistant.repoPathsToWatch)
-        projectsMenu.onChange = {
+        let changed = {
             gitWatcher.watch(assistant.repoPathsToWatch)
             statusItem.render(assistant.menuBar)
         }
+        projectsMenu.onChange = changed
+        tasksMenu.onChange = changed
+        setUpQuickAdd(assistant, changed: changed)
+        statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
 
         _ = ActiveWindowSensor.requestAccessibility()
         let windowSensor = ActiveWindowSensor()
@@ -45,18 +54,47 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         idleSensor.start(delivering: receive)
     }
 
+    private func setUpQuickAdd(_ assistant: Assistant, changed: @escaping () -> Void) {
+        hotKey = HotKey { [weak self] in self?.openQuickAdd(assistant) }
+        quickAdd.onSubmit = { [weak self] title, start in
+            guard let self else { return }
+            do {
+                let task = try assistant.quickAdd(title, start: start)
+                let entry = assistant.operationLog.last
+                changed()
+                let destination = Self.destination(task.project, in: assistant)
+                added.show(
+                    start ? "Started “\(task.title)” · \(destination)" : "Added “\(task.title)” · \(destination)",
+                    started: start,
+                    onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(task.id, asInterruption: true) } },
+                    onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry.id) } } })
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    private func openQuickAdd(_ assistant: Assistant) {
+        quickAdd.show(destination: Self.destination(assistant.now.project, in: assistant))
+    }
+
+    /// Where a quick-added Task goes, as the palette and the confirmation name it.
+    private static func destination(_ project: Project.ID?, in assistant: Assistant) -> String {
+        project.flatMap(assistant.project)?.shortName.uppercased() ?? "NO PROJECT"
+    }
+
     /// The Assistant over the SQLite store, or, if that can't be opened or read, over a store
     /// that lasts only this run, with the reason shown in the menu.
     private func makeAssistant() -> (Assistant, storeProblem: String?) {
         let clock = SystemClock()
         do {
             let store = try SQLiteStore(url: SQLiteStore.defaultURL())
-            let assistant = try Assistant(clock: clock, projects: store, homeDirectory: NSHomeDirectory())
+            let assistant = try Assistant(clock: clock, store: store, homeDirectory: NSHomeDirectory())
             self.store = store
             return (assistant, nil)
         } catch {
             // An empty in-memory store can't fail to load.
-            let assistant = try! Assistant(clock: clock, projects: VolatileProjectStore(), homeDirectory: NSHomeDirectory())
+            let assistant = try! Assistant(clock: clock, store: VolatileStore(), homeDirectory: NSHomeDirectory())
             return (assistant, "\(error)")
         }
     }
