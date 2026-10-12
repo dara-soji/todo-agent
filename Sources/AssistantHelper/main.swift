@@ -5,7 +5,7 @@ import AssistantPersistence
 /// Wires the OS adapters to the core. Everything the assistant decides happens in AssistantCore.
 @MainActor
 final class HelperDelegate: NSObject, NSApplicationDelegate {
-    private let assistant = Assistant(clock: SystemClock())
+    private var assistant: Assistant!
     /// Held for the helper's whole run: owning it is what makes the helper the store's only writer.
     private var store: SQLiteStore?
     private var statusItem: StatusItemController?
@@ -19,15 +19,22 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             storeProblem = "\(error)"
         }
 
-        let statusItem = StatusItemController(showing: assistant.menuBar, storeProblem: storeProblem)
+        let assistant = Assistant(
+            clock: SystemClock(),
+            projects: store ?? VolatileProjectStore(),
+            homeDirectory: NSHomeDirectory())
+        self.assistant = assistant
+
+        var statusItem: StatusItemController!
+        let projectsMenu = ProjectsMenu(assistant: assistant) { statusItem.render(assistant.menuBar) }
+        statusItem = StatusItemController(showing: assistant.menuBar, projectsMenu: projectsMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
         StatusItemController.registerLoginItemOnFirstLaunch()
 
         _ = ActiveWindowSensor.requestAccessibility()
         let sensor = ActiveWindowSensor()
         self.sensor = sensor
-        sensor.start { [weak self] signal in
-            guard let self else { return }
+        sensor.start { signal in
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
         }

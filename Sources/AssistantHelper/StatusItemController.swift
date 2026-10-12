@@ -9,9 +9,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private var menuBar: MenuBar
     private let storeProblem: String?
+    private let projectsMenu: ProjectsMenu
 
-    init(showing menuBar: MenuBar, storeProblem: String?) {
+    init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, storeProblem: String?) {
         self.menuBar = menuBar
+        self.projectsMenu = projectsMenu
         self.storeProblem = storeProblem
         super.init()
         menu.delegate = self
@@ -26,9 +28,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func drawTitle() {
-        statusItem.button?.attributedTitle = NSAttributedString(string: menuBar.title, attributes: [
-            .font: Theme.mono(12), .kern: 0.6,
-        ])
+        let title = NSMutableAttributedString()
+        switch menuBar.marker {
+        case .project:
+            title.append(NSAttributedString(string: "■ ", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(11)]))
+        case .noProject:
+            title.append(NSAttributedString(string: "□ ", attributes: [.foregroundColor: Theme.steel, .font: Theme.mono(11)]))
+        case .unknown:
+            break
+        }
+        title.append(NSAttributedString(string: menuBar.title, attributes: [.font: Theme.mono(12), .kern: 0.6]))
+        statusItem.button?.attributedTitle = title
     }
 
     // Built when opened so it always reflects the latest state.
@@ -37,6 +47,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(header("Now"))
         menu.addItem(detail(menuBar.nowDetail))
+        if let evidence = menuBar.evidence { menu.addItem(metadata(evidence)) }
+        if let window = menuBar.window { menu.addItem(metadata(window)) }
+
+        menu.addItem(.separator())
+        menu.addItem(projectsMenu.item())
 
         if !ActiveWindowSensor.hasAccessibility {
             menu.addItem(.separator())
@@ -64,6 +79,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func detail(_ text: String) -> NSMenuItem {
         let item = NSMenuItem()
         item.attributedTitle = NSAttributedString(string: text, attributes: [.font: Theme.display(13)])
+        item.isEnabled = false
+        return item
+    }
+
+    private func metadata(_ text: String) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: Theme.mono(11), .foregroundColor: Theme.steel,
+        ])
         item.isEnabled = false
         return item
     }
