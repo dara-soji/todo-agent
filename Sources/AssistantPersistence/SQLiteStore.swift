@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 4
+    static let schemaVersion = 5
 
     public let url: URL
     private var db: OpaquePointer?
@@ -92,6 +92,10 @@ public final class SQLiteStore {
                     CREATE INDEX operation_log_at ON operation_log (at);
                     """)
             }
+            if stored < 5 {
+                // Small settings stored whole as JSON, e.g. Dara's tier rules.
+                try run("CREATE TABLE settings (key TEXT PRIMARY KEY, json TEXT NOT NULL);")
+            }
             try execute("""
                 INSERT INTO meta (key, value) VALUES ('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
@@ -165,21 +169,34 @@ extension SQLiteStore: AssistantStore {
         StoreSnapshot(
             projects: try loadProjects(),
             tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
-            log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)))
+            log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
+            guardrailRules: readable([GuardrailRule].self,
+                                     try rows("SELECT key, json FROM settings WHERE key = '\(Self.guardrailKey)';", columns: 2))
+                .first ?? [])
     }
 
-    public func write(_ change: Change, log entry: LogEntry) throws {
+    private static let guardrailKey = "guardrail_rules"
+
+    public func write(_ change: Change, log entries: [LogEntry]) throws {
         try run("BEGIN IMMEDIATE;")
         do {
             for project in change.projects { try upsert(project) }
+            if let rules = change.guardrailRules {
+                try execute("""
+                    INSERT INTO settings (key, json) VALUES (?, ?)
+                    ON CONFLICT(key) DO UPDATE SET json = excluded.json;
+                    """, Self.guardrailKey, try encode(rules))
+            }
             for task in change.tasks {
                 try execute("""
                     INSERT INTO tasks (id, json) VALUES (?, ?)
                     ON CONFLICT(id) DO UPDATE SET json = excluded.json;
                     """, task.id.rawValue.uuidString, try encode(task))
             }
-            try execute("INSERT INTO operation_log (id, at, json) VALUES (?, ?, ?);",
-                        entry.id.rawValue.uuidString, String(entry.at.timeIntervalSinceReferenceDate), try encode(entry))
+            for entry in entries {
+                try execute("INSERT INTO operation_log (id, at, json) VALUES (?, ?, ?);",
+                            entry.id.rawValue.uuidString, String(entry.at.timeIntervalSinceReferenceDate), try encode(entry))
+            }
             try run("COMMIT;")
         } catch {
             try? run("ROLLBACK;")

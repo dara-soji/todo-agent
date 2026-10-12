@@ -132,7 +132,7 @@ enum ToolCatalog {
                 title: try args.string("title") ?? "", backLink: try args.string("back_link"),
                 deadline: try args.date("deadline"), project: try args.projectID("project_id"),
                 effort: try args.effort("effort"), kind: try args.kind("kind")), by: .claudeCode)
-            return ranResult(assistant, task.id)
+            return outcome(assistant, task: task.id)
         },
         Spec(name: "edit_task", description: "Change a Task's fields. Leave a field out to keep it; pass null to clear it.",
              input: object([
@@ -149,7 +149,25 @@ enum ToolCatalog {
                 title: try args.string("title"), deadline: try args.clearable("deadline", args.date),
                 project: try args.clearable("project_id", args.projectID), effort: try args.clearable("effort", args.effort),
                 kind: try args.clearable("kind", args.kind)), by: .claudeCode)
-            return ranResult(assistant, id)
+            return outcome(assistant, task: id)
+        },
+        Spec(name: "bulk_edit_tasks",
+             description: "Change the same fields on several Tasks. More than five asks Dara to confirm in the menu bar, with the Tasks listed.",
+             input: object([
+                 "task_ids": ["type": "array", "items": uuid, "minItems": 1, "maxItems": 200],
+                 "title": ["type": "string", "minLength": 1],
+                 "deadline": nullable(dateTime),
+                 "project_id": nullable(uuid),
+                 "effort": nullable(enumeration(Shapes.efforts)),
+                 "kind": nullable(enumeration(Shapes.kinds)),
+             ], required: ["task_ids"]),
+             output: ran, kind: .operation(.bulkEditTasks)) { assistant, args in
+            let ids = try args.taskIDs("task_ids")
+            try assistant.editTasks(ids, TaskChanges(
+                title: try args.string("title"), deadline: try args.clearable("deadline", args.date),
+                project: try args.clearable("project_id", args.projectID), effort: try args.clearable("effort", args.effort),
+                kind: try args.clearable("kind", args.kind)), by: .claudeCode)
+            return outcome(assistant, task: nil)
         },
         taskOperation("complete_task", "Mark a Task done, when Dara has asked for it.", .completeTask) {
             try $0.completeTask($1, by: .claudeCode)
@@ -168,7 +186,7 @@ enum ToolCatalog {
             let wake = try args.date("until") ?? (try args.number("hours")).map { assistant.now(plusHours: $0) }
             guard wake != nil || note != nil else { throw ToolError("Give until, hours or waiting_on.") }
             try assistant.snoozeTask(id, until: wake, note: note, by: .claudeCode)
-            return ranResult(assistant, id)
+            return outcome(assistant, task: id)
         },
         taskOperation("drop_task", "Drop a Task: it stays in the list but out of play.", .dropTask) {
             try $0.dropTask($1, by: .claudeCode)
@@ -196,14 +214,26 @@ enum ToolCatalog {
              output: ran, kind: .operation(kind)) { assistant, args in
             let id = try args.taskID()
             try operation(assistant, id)
-            return ranResult(assistant, id)
+            return outcome(assistant, task: id)
         }
     }
 
-    /// An Operation that ran: the Task as it now is, and the log entry it wrote.
-    private static func ranResult(_ assistant: Assistant, _ id: AssistantCore.Task.ID) -> Value {
-        ["status": "ran", "task": assistant.task(id).map(Shapes.task) ?? .null,
-         "log_entry": assistant.operationLog.last.map(Shapes.logEntry) ?? .null]
+    /// What came of the Operation just asked for: if it ran, the Task as it now is and the log entry
+    /// it wrote; if it waits for Dara, the Ask and when it expires, with the Task unchanged.
+    private static func outcome(_ assistant: Assistant, task id: AssistantCore.Task.ID?) -> Value {
+        let task = id.flatMap(assistant.task).map(Shapes.task) ?? .null
+        switch assistant.lastOutcome {
+        case let .pending(askID)?:
+            let ask = assistant.asks.first { $0.id == askID }
+            return ["status": "pending", "task": task, "log_entry": .null,
+                    "ask_id": .string(askID.rawValue.uuidString), "expires_at": ask.map { Shapes.date($0.expires) } ?? .null]
+        case let .ran(entryID)?:
+            let entry = assistant.operationLog.last { $0.id == entryID }
+            return ["status": "ran", "task": task, "log_entry": entry.map(Shapes.logEntry) ?? .null,
+                    "ask_id": .null, "expires_at": .null]
+        case nil:
+            return ["status": "ran", "task": task, "log_entry": .null, "ask_id": .null, "expires_at": .null]
+        }
     }
 
     // MARK: Schema pieces
@@ -214,9 +244,10 @@ enum ToolCatalog {
     private static let list: Value = ["type": "array", "items": ["type": "object"]]
     private static let nullableObject: Value = ["type": ["object", "null"]]
     private static let nullableString: Value = ["type": ["string", "null"]]
-    /// Every Operation tool returns this shape.
+    /// Every Operation tool returns this shape: "ran", or "pending" until Dara confirms in the menu bar.
     private static let ran = result([
-        "status": enumeration(["ran"]), "task": nullableObject, "log_entry": nullableObject,
+        "status": enumeration(["ran", "pending"]), "task": nullableObject, "log_entry": nullableObject,
+        "ask_id": nullableString, "expires_at": nullableString,
     ])
 
     private static func object(_ properties: [String: Value], required: [String] = []) -> Value {

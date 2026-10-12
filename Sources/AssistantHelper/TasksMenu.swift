@@ -27,6 +27,9 @@ final class TasksMenu: NSObject {
     func decisionItems() -> [NSMenuItem] {
         assistant.decisions.compactMap { decision in
             switch decision {
+            case let .confirm(id):
+                guard let ask = assistant.asks.first(where: { $0.id == id }) else { return nil }
+                return askItem(ask)
             case let .skippedThreeTimes(id):
                 guard let task = assistant.task(id) else { return nil }
                 let item = NSMenuItem(title: "Skipped 3×: \(task.title)", action: nil, keyEquivalent: "")
@@ -37,6 +40,45 @@ final class TasksMenu: NSObject {
                 return item
             }
         }
+    }
+
+    /// "Claude Code asks: …" with what it would do, and Confirm / Decline. Confirming happens only here.
+    private func askItem(_ ask: Ask) -> NSMenuItem {
+        let who = switch ask.startedBy {
+        case .claudeCode: "Claude Code asks"
+        case .helper: "The assistant asks"
+        case .dara: "Confirm"
+        }
+        let item = NSMenuItem(title: "\(who): \(ask.summary)", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        for line in ask.preview.prefix(12) {
+            menu.addItem(withTitle: line, action: nil, keyEquivalent: "").isEnabled = false
+        }
+        if ask.preview.count > 12 {
+            menu.addItem(withTitle: "… and \(ask.preview.count - 12) more", action: nil, keyEquivalent: "").isEnabled = false
+        }
+        if !ask.preview.isEmpty { menu.addItem(.separator()) }
+        menu.addItem(askAction("Confirm", #selector(confirmAsk(_:)), ask.id))
+        menu.addItem(askAction("Decline", #selector(declineAsk(_:)), ask.id))
+        item.submenu = menu
+        return item
+    }
+
+    private func askAction(_ title: String, _ selector: Selector, _ id: Ask.ID) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        item.representedObject = id
+        return item
+    }
+
+    @objc private func confirmAsk(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? Ask.ID else { return }
+        Attempt.run("Couldn't run it", then: onChange) { try assistant.confirmAsk(id) }
+    }
+
+    @objc private func declineAsk(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? Ask.ID else { return }
+        Attempt.run("Couldn't decline it", then: onChange) { try assistant.declineAsk(id) }
     }
 
     func tasksItem() -> NSMenuItem {

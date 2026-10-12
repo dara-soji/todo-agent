@@ -52,10 +52,11 @@ extension Assistant {
 
     // MARK: Changing
 
-    public func editTask(_ id: Task.ID, _ changes: TaskChanges, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func editTask(_ id: Task.ID, _ changes: TaskChanges, by startedBy: StartedBy = .dara) throws -> Outcome {
         let title = try changes.title.map { try Self.nonEmpty($0, else: .emptyTitle) }
         if case let .some(project?) = changes.project, projectsByID[project] == nil { throw Failure.unknownProject(project) }
-        try change(id, .editTask, "Edited", by: startedBy) { task in
+        return try change(id, .editTask, "Edited", by: startedBy) { task in
             if let title { task.title = title }
             if let deadline = changes.deadline { task.deadline = deadline }
             if let project = changes.project { task.project = project }
@@ -66,39 +67,45 @@ extension Assistant {
 
     /// Makes the Task the Committed Task; the previous one goes back to open. As an interruption
     /// (starting a Task just added), the previous one is also marked to resume.
-    public func commitTask(_ id: Task.ID, asInterruption: Bool = false, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func commitTask(_ id: Task.ID, asInterruption: Bool = false, by startedBy: StartedBy = .dara) throws -> Outcome {
         let task = try existing(id)
         guard task.deletedAt == nil else { throw Failure.deletedTask(id) }
-        try perform(.commitTask, "Started “\(task.title)”", by: startedBy,
-                    writing: committing(task, interrupting: asInterruption))
+        return try perform(.commitTask, "Started “\(task.title)”", by: startedBy,
+                           writing: committing(task, interrupting: asInterruption))
     }
 
     /// Dara marks a Task done, directly or by asking in conversation; the helper alone may at most suggest it.
-    public func completeTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func completeTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard startedBy != .helper else { throw Failure.onlyDaraMarksDone }
-        try change(id, .completeTask, "Completed", by: startedBy) { $0.status = .done }
+        return try change(id, .completeTask, "Completed", by: startedBy) { $0.status = .done }
     }
 
     /// Snoozes until `until`, or with no wake time when waiting on someone (say who in `note`).
-    public func snoozeTask(_ id: Task.ID, until: Date?, note: String? = nil, by startedBy: StartedBy = .dara) throws {
-        try change(id, .snoozeTask, "Snoozed", by: startedBy) {
+    @discardableResult
+    public func snoozeTask(_ id: Task.ID, until: Date?, note: String? = nil, by startedBy: StartedBy = .dara) throws -> Outcome {
+        return try change(id, .snoozeTask, "Snoozed", by: startedBy) {
             $0.status = .snoozed(until: until, note: note)
             $0.clearSkips()
         }
     }
 
-    public func snoozeTask(_ id: Task.ID, forHours hours: Double, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func snoozeTask(_ id: Task.ID, forHours hours: Double, by startedBy: StartedBy = .dara) throws -> Outcome {
         try snoozeTask(id, until: clock.now + hours * 60 * 60, by: startedBy)
     }
 
     /// Snoozes until 9:00 tomorrow.
-    public func snoozeTillTomorrow(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func snoozeTillTomorrow(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: clock.now))!
-        try snoozeTask(id, until: calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!, by: startedBy)
+        return try snoozeTask(id, until: calendar.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!, by: startedBy)
     }
 
-    public func dropTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .dropTask, "Dropped", by: startedBy) {
+    @discardableResult
+    public func dropTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+        return try change(id, .dropTask, "Dropped", by: startedBy) {
             $0.status = .dropped
             $0.clearSkips()
         }
@@ -114,16 +121,18 @@ extension Assistant {
     }
 
     /// Accepts Next: it becomes the Committed Task.
-    public func startNext(by startedBy: StartedBy = .dara) throws {
-        guard let id = next.task else { return }
-        try commitTask(id, by: startedBy)
+    @discardableResult
+    public func startNext(by startedBy: StartedBy = .dara) throws -> Outcome {
+        guard let id = next.task else { throw Failure.nothingNext }
+        return try commitTask(id, by: startedBy)
     }
 
     /// Takes the Task out of Next for two hours. The third skip asks Dara what to do with it.
-    public func skipTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func skipTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard try existing(id).status == .open else { throw Failure.notOpen(id) }
         let until = clock.now + Self.skipFor
-        try change(id, .skipTask, "Skipped", by: startedBy) {
+        return try change(id, .skipTask, "Skipped", by: startedBy) {
             $0.skippedUntil = until
             $0.skipCount += 1
         }
@@ -131,8 +140,9 @@ extension Assistant {
 
     /// Dara's "Keep it" for a Task skipped three times: its skips start over, though it still sits
     /// out the skip just made.
-    public func keepTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .keepTask, "Kept", by: startedBy) { $0.skipCount = 0 }
+    @discardableResult
+    public func keepTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+        return try change(id, .keepTask, "Kept", by: startedBy) { $0.skipCount = 0 }
     }
 
     /// How long Skip keeps a Task out of Next.
@@ -140,19 +150,39 @@ extension Assistant {
     /// The skip that asks what to do.
     static let skipsBeforeAsking = 3
 
-    /// Choices waiting for Dara in the menu.
+    /// Choices waiting for Dara in the menu: Asks to confirm first, then Tasks skipped three times.
     public var decisions: [Decision] {
-        tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
+        asks.map { .confirm($0.id) } + tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
     }
 
     /// Moves the Task to the Deleted list, where it can be restored. A committed Task stops being committed.
-    public func deleteTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func deleteTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         let at = clock.now
-        try change(id, .deleteTask, "Deleted", by: startedBy) { $0 = $0.deleted(at: at) }
+        return try change(id, .deleteTask, "Deleted", by: startedBy) { $0 = $0.deleted(at: at) }
     }
 
-    public func restoreTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .restoreTask, "Restored", by: startedBy) { $0.deletedAt = nil }
+    @discardableResult
+    public func restoreTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+        return try change(id, .restoreTask, "Restored", by: startedBy) { $0.deletedAt = nil }
+    }
+
+    /// Edits several Tasks at once. More than a few asks Dara first, with their titles as the preview.
+    @discardableResult
+    public func editTasks(_ ids: [Task.ID], _ changes: TaskChanges, by startedBy: StartedBy = .dara) throws -> Outcome {
+        let title = try changes.title.map { try Self.nonEmpty($0, else: .emptyTitle) }
+        if case let .some(project?) = changes.project, projectsByID[project] == nil { throw Failure.unknownProject(project) }
+        let edited = try ids.map { id in
+            var task = try existing(id)
+            if let title { task.title = title }
+            if let deadline = changes.deadline { task.deadline = deadline }
+            if let project = changes.project { task.project = project }
+            if let effort = changes.effort { task.effort = effort }
+            if let kind = changes.kind { task.kind = kind }
+            return task
+        }
+        return try perform(.bulkEditTasks, "Edited \(ids.count) Tasks", by: startedBy, writing: Change(tasks: edited),
+                           preview: edited.map(\.title))
     }
 
     /// Snoozed Tasks whose wake time has come go back to open, as Operations the helper starts.
@@ -160,7 +190,7 @@ extension Assistant {
         for task in tasks {
             guard case let .snoozed(until?, _) = task.status, until <= clock.now else { continue }
             // A failed write leaves it snoozed; the next Signal tries again.
-            try? change(task.id, .wakeTask, "Woke", by: .helper) { $0.status = .open }
+            _ = try? change(task.id, .wakeTask, "Woke", by: .helper) { $0.status = .open }
         }
     }
 
@@ -183,10 +213,10 @@ extension Assistant {
         return Change(tasks: tasks)
     }
 
-    private func change(_ id: Task.ID, _ kind: OperationKind, _ verb: String, by startedBy: StartedBy, _ edit: (inout Task) -> Void) throws {
+    private func change(_ id: Task.ID, _ kind: OperationKind, _ verb: String, by startedBy: StartedBy, _ edit: (inout Task) -> Void) throws -> Outcome {
         var task = try existing(id)
         edit(&task)
-        try perform(kind, "\(verb) “\(task.title)”", by: startedBy, writing: Change(tasks: [task]))
+        return try perform(kind, "\(verb) “\(task.title)”", by: startedBy, writing: Change(tasks: [task]))
     }
 
     private func existing(_ id: Task.ID) throws -> Task {

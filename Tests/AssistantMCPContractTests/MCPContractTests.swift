@@ -3,6 +3,7 @@ import AssistantMCP
 import AssistantTestSupport
 import Foundation
 import MCP
+import Network
 import Testing
 
 /// The contract between the helper and Claude Code (ADR 0001): the real MCP server, in process,
@@ -19,15 +20,16 @@ import Testing
 
         #expect(Set(tools.map(\.name)) == [
             "get_now", "get_next", "list_tasks", "list_projects", "get_calendar_today", "get_operation_log",
-            "add_task", "edit_task", "complete_task", "snooze_task", "drop_task", "delete_task", "restore_task",
-            "commit_task", "skip_task",
+            "add_task", "edit_task", "bulk_edit_tasks", "complete_task", "snooze_task", "drop_task", "delete_task",
+            "restore_task", "commit_task", "skip_task",
         ])
     }
 
     /// Which Operation each tool runs. The tier a tool declares must be the Guardrail's tier for that
     /// Operation, so a tool wired to the wrong Operation shows up here once tiers differ.
     static let operations: [String: OperationKind] = [
-        "add_task": .addTask, "edit_task": .editTask, "complete_task": .completeTask, "snooze_task": .snoozeTask,
+        "add_task": .addTask, "edit_task": .editTask, "bulk_edit_tasks": .bulkEditTasks,
+        "complete_task": .completeTask, "snooze_task": .snoozeTask,
         "drop_task": .dropTask, "delete_task": .deleteTask, "restore_task": .restoreTask, "commit_task": .commitTask,
         "skip_task": .skipTask,
     ]
@@ -68,6 +70,7 @@ import Testing
             "commit_task": ["task_id": try fresh()], "complete_task": ["task_id": try fresh()],
             "drop_task": ["task_id": try fresh()], "delete_task": ["task_id": try fresh()],
             "restore_task": ["task_id": try fresh(deleted: true)],
+            "bulk_edit_tasks": ["task_ids": [try fresh(), try fresh()], "kind": "deep"],
         ]
         #expect(Set(calls.keys) == Set(tools.map(\.name)))
 
@@ -90,6 +93,7 @@ import Testing
         })
 
         #expect(required["add_task"] == ["title"])
+        #expect(required["bulk_edit_tasks"] == ["task_ids"])
         for name in ["edit_task", "complete_task", "snooze_task", "drop_task", "delete_task", "commit_task", "skip_task"] {
             #expect(required[name] == ["task_id"], "\(name)")
         }
@@ -240,6 +244,101 @@ import Testing
         #expect(harness.assistant.operationLog.isEmpty)
     }
 
+    // MARK: Asks
+
+    @Test func anAskOperationComesBackPendingAndChangesNothing() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let task = try harness.assistant.quickAdd("Ship it")
+        try harness.assistant.tighten(.completeTask)
+
+        let result = try await harness.call("complete_task", ["task_id": .string(task.id.rawValue.uuidString)])
+
+        let ask = try #require(harness.assistant.asks.first)
+        #expect(result["status"] == .string("pending"))
+        #expect(result["ask_id"] == .string(ask.id.rawValue.uuidString))
+        #expect(result["expires_at"] == .string(iso(ask.expires)))
+        #expect(result["log_entry"] == .null)
+        #expect(harness.assistant.task(task.id)?.status == .open)
+        #expect(ask.startedBy == .claudeCode)
+    }
+
+    @Test func aBulkEditOfMoreThanFiveTasksAsksWithAPreview() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let ids = try (1...6).map { Value.string(try harness.assistant.quickAdd("T\($0)").id.rawValue.uuidString) }
+
+        let small = try await harness.call("bulk_edit_tasks", ["task_ids": .array(Array(ids.prefix(5))), "effort": "small"])
+        #expect(small["status"] == .string("ran"))
+
+        let large = try await harness.call("bulk_edit_tasks", ["task_ids": .array(ids), "effort": "large"])
+        #expect(large["status"] == .string("pending"))
+        #expect(harness.assistant.asks.first?.preview == ["T1", "T2", "T3", "T4", "T5", "T6"])
+        #expect(harness.assistant.tasks.allSatisfy { $0.effort != .large })
+    }
+
+    @Test func callsInOneConversationAreOneConfirmAndOthersAreSeparate() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let tasks = try (1...3).map { try harness.assistant.quickAdd("T\($0)") }
+        try harness.assistant.tighten(.dropTask)
+        let conversation = try await harness.client()
+        let other = try await harness.client()
+
+        for task in tasks.prefix(2) {
+            _ = try await conversation.callTool(name: "drop_task", arguments: ["task_id": .string(task.id.rawValue.uuidString)])
+        }
+        _ = try await other.callTool(name: "drop_task", arguments: ["task_id": .string(tasks[2].id.rawValue.uuidString)])
+
+        #expect(harness.assistant.asks.map(\.operations.count).sorted() == [1, 2])
+    }
+
+    @Test func whenTheConversationSaysGoodbyeItsAsksExpire() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let task = try harness.assistant.quickAdd("Ship it")
+        try harness.assistant.tighten(.completeTask)
+        _ = try await harness.call("complete_task", ["task_id": .string(task.id.rawValue.uuidString)])
+        let session = try #require(harness.assistant.asks.first?.session)
+
+        #expect(try await harness.rawDelete(session: session) == 200)
+
+        #expect(harness.assistant.asks.isEmpty)
+        #expect(harness.assistant.operationLog.last?.confirmation == .expired)
+    }
+
+    @Test func whenTheConversationEndsItsAsksExpire() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let task = try harness.assistant.quickAdd("Ship it")
+        try harness.assistant.tighten(.completeTask)
+        // Without its own event stream, so the raw one below is the session's only one.
+        _ = try await harness.client(streaming: false)
+            .callTool(name: "complete_task", arguments: ["task_id": .string(task.id.rawValue.uuidString)])
+        let session = try #require(harness.assistant.asks.first?.session)
+
+        // As when Claude Code quits: its standing event stream's socket closes, with no goodbye.
+        try await harness.openEventStreamThenQuit(session: session)
+
+        for _ in 0..<50 where !harness.assistant.asks.isEmpty {
+            try await _Concurrency.Task.sleep(for: .milliseconds(20))
+        }
+        #expect(harness.assistant.asks.isEmpty)
+        #expect(harness.assistant.operationLog.last?.confirmation == .expired)
+        #expect(harness.assistant.task(task.id)?.status == .open)
+    }
+
+    @Test func noToolCanConfirmAnAskChangeATierOrRunANeverOperation() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+
+        let (tools, _) = try await harness.client().listTools()
+
+        #expect(tools.allSatisfy { $0._meta?["tier"] != .string("never") })
+        let forbidden = ["confirm", "decline", "approve", "tier", "guardrail", "loosen", "tighten"]
+        #expect(tools.allSatisfy { tool in !forbidden.contains { tool.name.contains($0) } })
+    }
+
     // MARK: Reads
 
     @Test func readToolsReportNowNextTasksProjectsCalendarAndTheLog() async throws {
@@ -386,12 +485,12 @@ struct Harness {
         _Concurrency.Task { await server.stop() }
     }
 
-    func client(token: String? = nil) async throws -> Client {
-        try await Self.connect(url: url, bearer: token ?? self.token)
+    func client(token: String? = nil, streaming: Bool = true) async throws -> Client {
+        try await Self.connect(url: url, bearer: token ?? self.token, streaming: streaming)
     }
 
-    private nonisolated static func connect(url: URL, bearer: String) async throws -> Client {
-        let transport = HTTPClientTransport(endpoint: url, requestModifier: { request in
+    private nonisolated static func connect(url: URL, bearer: String, streaming: Bool) async throws -> Client {
+        let transport = HTTPClientTransport(endpoint: url, streaming: streaming, requestModifier: { request in
             var request = request
             request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
             return request
@@ -412,6 +511,46 @@ struct Harness {
         let (content, isError) = try await client().callTool(name: tool, arguments: arguments)
         let text = content.compactMap { if case let .text(text, _, _) = $0 { text } else { nil } }.joined()
         return (isError ?? false, text)
+    }
+
+    /// Opens the session's standing GET event stream on a raw socket, waits for the response head,
+    /// then closes the socket the way a quitting process does.
+    func openEventStreamThenQuit(session: String) async throws {
+        let port = NWEndpoint.Port(rawValue: UInt16(url.port!))!
+        let connection = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        let request = """
+            GET \(AssistantMCPServer.endpoint) HTTP/1.1\r
+            Host: 127.0.0.1:\(url.port!)\r
+            Authorization: Bearer \(token)\r
+            Accept: text/event-stream\r
+            Mcp-Session-Id: \(session)\r
+            MCP-Protocol-Version: 2025-11-25\r
+            \r
+
+            """
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            connection.stateUpdateHandler = { state in
+                guard case .ready = state else { return }
+                connection.send(content: Data(request.utf8), completion: .contentProcessed { _ in
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, _, error in
+                        connection.cancel()
+                        if let error { done.resume(throwing: error) } else { done.resume() }
+                    }
+                })
+            }
+            connection.start(queue: .global())
+        }
+    }
+
+    /// Status code of a DELETE ending a session, as a client says goodbye.
+    func rawDelete(session: String) async throws -> Int {
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(session, forHTTPHeaderField: "Mcp-Session-Id")
+        request.setValue("2025-11-25", forHTTPHeaderField: "MCP-Protocol-Version")
+        let (_, response) = try await URLSession(configuration: .ephemeral).data(for: request)
+        return (response as? HTTPURLResponse)?.statusCode ?? 0
     }
 
     /// Status code of a bare initialize POST, for checking access rules below the SDK client.

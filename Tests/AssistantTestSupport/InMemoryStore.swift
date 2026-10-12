@@ -14,9 +14,9 @@ public final class InMemoryStore: AssistantStore {
         snapshot
     }
 
-    public func write(_ change: Change, log entry: LogEntry) throws {
+    public func write(_ change: Change, log entries: [LogEntry]) throws {
         if failWrites { throw WriteFailed() }
         snapshot.apply(change)
-        snapshot.log.append(entry)
+        snapshot.log += entries
     }
 }

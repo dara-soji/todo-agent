@@ -25,8 +25,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 
         let projectsMenu = ProjectsMenu(assistant: assistant)
         let tasksMenu = TasksMenu(assistant: assistant)
+        let guardrailsMenu = GuardrailsMenu(assistant: assistant)
         let statusItem = StatusItemController(
-            showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, storeProblem: storeProblem)
+            showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
+            storeProblem: storeProblem)
         self.statusItem = statusItem
         statusItem.currentMenuBar = { assistant.menuBar }
         StatusItemController.registerLoginItemOnFirstLaunch()
@@ -44,6 +46,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
         projectsMenu.onChange = changed
         tasksMenu.onChange = changed
+        guardrailsMenu.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
         startMCPServer(assistant, statusItem: statusItem, changed: changed)

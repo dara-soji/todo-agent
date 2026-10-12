@@ -6,8 +6,8 @@ final class VolatileStore: AssistantStore {
 
     func load() throws -> StoreSnapshot { snapshot }
 
-    func write(_ change: Change, log entry: LogEntry) throws {
+    func write(_ change: Change, log entries: [LogEntry]) throws {
         snapshot.apply(change)
-        snapshot.log.append(entry)
+        snapshot.log += entries
     }
 }

@@ -25,48 +25,54 @@ extension Assistant {
         return project
     }
 
-    public func renameProject(_ id: Project.ID, name: String, shortName: String? = nil, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func renameProject(_ id: Project.ID, name: String, shortName: String? = nil, by startedBy: StartedBy = .dara) throws -> Outcome {
         let name = try Self.nonEmpty(name, else: .emptyName)
-        try change(id, .editProject, "Renamed", by: startedBy) {
+        return try change(id, .editProject, "Renamed", by: startedBy) {
             $0.name = name
             $0.shortName = shortName ?? name
         }
     }
 
-    public func addMatcher(_ matcher: Matcher, to id: Project.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func addMatcher(_ matcher: Matcher, to id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         try addMatchers([matcher], to: id, by: startedBy)
     }
 
     /// Adds every Matcher, or none if any is invalid.
-    public func addMatchers(_ matchers: [Matcher], to id: Project.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func addMatchers(_ matchers: [Matcher], to id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         let matchers = try matchers.map(fitting.normalised)
-        try change(id, .editProject, "Added Matchers to", by: startedBy) { project in
+        return try change(id, .editProject, "Added Matchers to", by: startedBy) { project in
             for matcher in matchers where !project.matchers.contains(matcher) {
                 project.matchers.append(matcher)
             }
         }
     }
 
-    public func removeMatcher(_ matcher: Matcher, from id: Project.ID, by startedBy: StartedBy = .dara) throws {
+    @discardableResult
+    public func removeMatcher(_ matcher: Matcher, from id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         let matcher = (try? fitting.normalised(matcher)) ?? matcher
-        try change(id, .editProject, "Removed a Matcher from", by: startedBy) { $0.matchers.removeAll { $0 == matcher } }
+        return try change(id, .editProject, "Removed a Matcher from", by: startedBy) { $0.matchers.removeAll { $0 == matcher } }
     }
 
     /// An archived Project matches nothing until it is restored.
-    public func archiveProject(_ id: Project.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .archiveProject, "Archived", by: startedBy) { $0.status = .archived }
+    @discardableResult
+    public func archiveProject(_ id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+        return try change(id, .archiveProject, "Archived", by: startedBy) { $0.status = .archived }
     }
 
-    public func restoreProject(_ id: Project.ID, by startedBy: StartedBy = .dara) throws {
-        try change(id, .restoreProject, "Restored", by: startedBy) { $0.status = .active }
+    @discardableResult
+    public func restoreProject(_ id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+        return try change(id, .restoreProject, "Restored", by: startedBy) { $0.status = .active }
     }
 
     private func change(
         _ id: Project.ID, _ kind: OperationKind, _ verb: String, by startedBy: StartedBy, _ edit: (inout Project) -> Void
-    ) throws {
+    ) throws -> Outcome {
         guard var project = projectsByID[id] else { throw Failure.unknownProject(id) }
         edit(&project)
-        try perform(kind, "\(verb) Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]))
+        return try perform(kind, "\(verb) Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]))
     }
 
     private static func byName(_ a: Project, _ b: Project) -> Bool {
