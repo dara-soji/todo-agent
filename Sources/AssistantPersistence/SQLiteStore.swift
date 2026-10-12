@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 2
+    static let schemaVersion = 3
 
     public let url: URL
     private var db: OpaquePointer?
@@ -49,34 +49,62 @@ public final class SQLiteStore {
         try migrate()
     }
 
-    /// Each schema version only adds; running it again is harmless.
-    private func migrate() throws {
-        try run("""
-            CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS projects (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                short_name TEXT NOT NULL,
-                status TEXT NOT NULL CHECK (status IN ('active', 'archived'))
-            );
-            CREATE TABLE IF NOT EXISTS matchers (
-                project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-                position INTEGER NOT NULL,
-                kind TEXT NOT NULL CHECK (kind IN ('repoPath', 'urlPrefix')),
-                pattern TEXT NOT NULL,
-                PRIMARY KEY (project_id, position)
-            );
-            INSERT INTO meta (key, value) VALUES ('schema_version', '\(Self.schemaVersion)')
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-            """)
-    }
-
     deinit {
         sqlite3_close(db)  // Also frees the handle sqlite3_open returns on failure; nil is a no-op.
         if lockDescriptor >= 0 {
             flock(lockDescriptor, LOCK_UN)
             close(lockDescriptor)
         }
+    }
+
+    /// Brings any earlier schema up to `schemaVersion`, in one transaction.
+    private func migrate() throws {
+        try run("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+        let stored = try rows("SELECT value FROM meta WHERE key = 'schema_version';", columns: 1).first.flatMap { Int($0[0]) } ?? 0
+        guard stored < Self.schemaVersion else { return }
+
+        try run("BEGIN IMMEDIATE;")
+        do {
+            if stored < 2 {
+                try run("""
+                    CREATE TABLE projects (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        short_name TEXT NOT NULL,
+                        status TEXT NOT NULL CHECK (status IN ('active', 'archived'))
+                    );
+                    \(Self.matchersTable("matchers"))
+                    """)
+            } else if stored < 3 {
+                // v3 allows calendar keywords; SQLite can't change a CHECK, so rebuild the table.
+                try run("""
+                    \(Self.matchersTable("matchers_v3"))
+                    INSERT INTO matchers_v3 SELECT project_id, position, kind, pattern FROM matchers;
+                    DROP TABLE matchers;
+                    ALTER TABLE matchers_v3 RENAME TO matchers;
+                    """)
+            }
+            try execute("""
+                INSERT INTO meta (key, value) VALUES ('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                """, String(Self.schemaVersion))
+            try run("COMMIT;")
+        } catch {
+            try? run("ROLLBACK;")
+            throw error
+        }
+    }
+
+    private static func matchersTable(_ name: String) -> String {
+        """
+        CREATE TABLE \(name) (
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('repoPath', 'urlPrefix', 'calendarKeyword')),
+            pattern TEXT NOT NULL,
+            PRIMARY KEY (project_id, position)
+        );
+        """
     }
 
     /// One statement with `?` placeholders bound to `values`.

@@ -22,6 +22,10 @@ struct MatcherFitting {
                 throw Matcher.Invalid.bareDomain(prefix)
             }
             return .urlPrefix(withoutWWW(parts[0].lowercased()) + "/" + parts[1])
+        case let .calendarKeyword(keyword):
+            let keyword = keyword.trimmingCharacters(in: .whitespaces)
+            guard keyword.count >= 2 else { throw Matcher.Invalid.shortKeyword(keyword) }
+            return .calendarKeyword(keyword)
         }
     }
 
@@ -36,7 +40,21 @@ struct MatcherFitting {
             let port = url.port.map { ":\($0)" } ?? ""
             let page = withoutWWW(host.lowercased()) + port + url.path(percentEncoded: false)
             return urlFits(prefix: prefix, page: page)
+        case .calendarKeyword:
+            return false
         }
+    }
+
+    /// Whether a stored calendar-keyword Matcher fits an event's title.
+    func fits(_ matcher: Matcher, _ event: CalendarEvent) -> Bool {
+        guard case let .calendarKeyword(keyword) = matcher else { return false }
+        let pattern = "\\b" + NSRegularExpression.escapedPattern(for: keyword) + "\\b"
+        return event.title.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// A repo path as the file system knows it.
+    func absolute(_ path: String) -> String {
+        path == "~" || path.hasPrefix("~/") ? homeDirectory + path.dropFirst() : path
     }
 
     // MARK: Paths
@@ -45,10 +63,6 @@ struct MatcherFitting {
         if path == homeDirectory { return "~" }
         if path.hasPrefix(homeDirectory + "/") { return "~" + path.dropFirst(homeDirectory.count) }
         return path
-    }
-
-    private func absolute(_ path: String) -> String {
-        path == "~" || path.hasPrefix("~/") ? homeDirectory + path.dropFirst() : path
     }
 
     private func trimmingSlash(_ path: String) -> String {

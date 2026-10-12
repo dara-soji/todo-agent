@@ -34,7 +34,8 @@ final class ProjectsMenu: NSObject {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Remove Matcher", action: nil, keyEquivalent: "").isEnabled = false
             for matcher in project.matchers {
-                let remove = action(matcher.pattern, #selector(removeMatcher(_:)), (project.id, matcher))
+                let label = matcher.kind == .calendarKeyword ? "calendar: \(matcher.pattern)" : matcher.pattern
+            let remove = action(label, #selector(removeMatcher(_:)), (project.id, matcher))
                 remove.indentationLevel = 1
                 menu.addItem(remove)
             }
@@ -54,7 +55,7 @@ final class ProjectsMenu: NSObject {
     @objc private func newProject() {
         guard let answers = ask("New Project", fields: [
             ("Name", ""), ("Short name (optional)", ""),
-            ("Matchers, separated by commas: a repo path (~/code/x) or a URL prefix (github.com/you/x)", ""),
+            ("Matchers, separated by commas: a repo path (~/code/x), a URL prefix (github.com/you/x) or a calendar keyword (calendar: standup)", ""),
         ]) else { return }
         let shortName = answers[1].isEmpty ? nil : answers[1]
         attempt { try assistant.declareProject(name: answers[0], shortName: shortName, matchers: Self.matchers(answers[2])) }
@@ -69,7 +70,7 @@ final class ProjectsMenu: NSObject {
 
     @objc private func addMatcher(_ sender: NSMenuItem) {
         guard let project = sender.representedObject as? Project,
-              let answers = ask("Add Matcher to \(project.name)", fields: [("Repo paths or URL prefixes, separated by commas", "")])
+              let answers = ask("Add Matcher to \(project.name)", fields: [("Repo paths, URL prefixes or calendar keywords (calendar: standup), separated by commas", "")])
         else { return }
         attempt { try assistant.addMatchers(Self.matchers(answers[0]), to: project.id) }
     }
@@ -91,12 +92,16 @@ final class ProjectsMenu: NSObject {
 
     // MARK: Helpers
 
-    /// An entry starting with `~` or `/` is a repo path; anything else is a URL prefix.
+    /// `calendar: x` is a calendar keyword, an entry starting with `~` or `/` is a repo path,
+    /// and anything else is a URL prefix.
     private static func matchers(_ text: String) -> [Matcher] {
         text.split(whereSeparator: { $0 == "," || $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .map { $0.hasPrefix("~") || $0.hasPrefix("/") ? .repoPath($0) : .urlPrefix($0) }
+            .map { entry in
+                if entry.lowercased().hasPrefix("calendar:") { return .calendarKeyword(String(entry.dropFirst(9))) }
+                return entry.hasPrefix("~") || entry.hasPrefix("/") ? .repoPath(entry) : .urlPrefix(entry)
+            }
     }
 
     private func attempt(_ change: () throws -> Void) {
@@ -106,6 +111,7 @@ final class ProjectsMenu: NSObject {
             let message = switch invalid {
             case let .bareDomain(prefix): "“\(prefix)” is a bare domain. Add a path, e.g. \(prefix)/your-project."
             case let .relativePath(path): "“\(path)” isn't a full path. Start it with ~/ or /."
+            case let .shortKeyword(keyword): "“\(keyword)” is too short for a calendar keyword."
             }
             alert(message)
         } catch Assistant.Failure.emptyName {

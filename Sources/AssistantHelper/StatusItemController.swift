@@ -32,11 +32,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         switch menuBar.marker {
         case .project:
             title.append(NSAttributedString(string: "■ ", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(11)]))
-        case .noProject, .unknown:
+        case .noProject, .away, .unknown:
             break  // No marker: the hollow dashed dot is kept for Haiku guesses (ticket 11).
         }
         var text: [NSAttributedString.Key: Any] = [.font: Theme.mono(12), .kern: 0.6]
-        if menuBar.marker == .noProject { text[.foregroundColor] = Theme.steel }
+        if menuBar.marker == .noProject || menuBar.marker == .away { text[.foregroundColor] = Theme.steel }
         title.append(NSAttributedString(string: menuBar.title, attributes: text))
         statusItem.button?.attributedTitle = title
     }
@@ -53,9 +53,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(projectsMenu.item())
 
-        if !ActiveWindowSensor.hasAccessibility {
+        let permissions = [
+            ActiveWindowSensor.hasAccessibility ? nil
+                : action("Allow Accessibility to read window titles…", #selector(openAccessibilitySettings)),
+            CalendarSensor.hasAccess ? nil
+                : action("Allow Calendar access to match meetings…", #selector(openCalendarSettings)),
+        ].compactMap { $0 }
+        if !permissions.isEmpty {
             menu.addItem(.separator())
-            menu.addItem(action("Allow Accessibility to read window titles…", #selector(openAccessibilitySettings)))
+            permissions.forEach(menu.addItem)
         }
         if let storeProblem {
             menu.addItem(.separator())
@@ -110,6 +116,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard Bundle.main.bundleIdentifier != nil, !UserDefaults.standard.bool(forKey: key) else { return }
         UserDefaults.standard.set(true, forKey: key)
         try? SMAppService.mainApp.register()
+    }
+
+    @objc private func openCalendarSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func toggleLoginItem() {

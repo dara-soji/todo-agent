@@ -7,12 +7,19 @@ public final class Assistant {
         case emptyName
     }
 
+    /// Idle this long and Dara is Away.
+    static let awayAfter: TimeInterval = 5 * 60
+
     private let clock: WallClock
     private let store: ProjectStore
     private let fitting: MatcherFitting
     private var projectsByID: [Project.ID: Project]
     /// When each Project last matched, to break ties between equally specific Matchers.
     private var lastMatched: [Project.ID: Date] = [:]
+    private var calendarEvents: [CalendarEvent] = []
+    private var isAway = false
+    /// Checked-out branch by full repo path.
+    private var branches: [String: String] = [:]
 
     public private(set) var now: Now = .unknown
 
@@ -29,7 +36,36 @@ public final class Assistant {
             let window = ActiveWindow(app: app, title: title, url: url)
             let since = window == now.window ? now.since ?? clock.now : clock.now
             resolve(Now.Visit(window: window, since: since))
+        case let .calendar(events):
+            calendarEvents = events
+            resolve(now.visit)
+        case let .userIdle(seconds):
+            let wasAway = isAway
+            isAway = seconds >= Self.awayAfter
+            // Coming back starts a fresh stretch on the window.
+            let visit = wasAway && !isAway ? now.visit.map { Now.Visit(window: $0.window, since: clock.now) } : now.visit
+            resolve(visit)
+        case let .git(repo, branch):
+            branches[repo] = branch
         }
+    }
+
+    /// The checked-out branch of the repo a repo-path Matcher names, if it is watched.
+    public func branch(of matcher: Matcher) -> String? {
+        guard case let .repoPath(path) = matcher else { return nil }
+        return branches[fitting.absolute(path)]
+    }
+
+    /// Full paths of every active Project's repo-path Matchers, for the git watcher.
+    public var repoPathsToWatch: [String] {
+        let paths = projectsByID.values
+            .filter { $0.status == .active }
+            .flatMap(\.matchers)
+            .compactMap { matcher -> String? in
+                guard case let .repoPath(path) = matcher else { return nil }
+                return fitting.absolute(path)
+            }
+        return Array(Set(paths)).sorted()
     }
 
     // MARK: Projects
@@ -98,7 +134,7 @@ public final class Assistant {
     private func commit(_ project: Project) throws {
         try store.save(project)
         projectsByID[project.id] = project
-        if let visit = now.visit { resolve(visit) }
+        resolve(now.visit)
     }
 
     private static func validName(_ name: String) throws -> String {
@@ -113,22 +149,35 @@ public final class Assistant {
 
     // MARK: Resolving Now
 
-    private func resolve(_ visit: Now.Visit) {
-        let match = bestMatch(for: visit.window)
+    private func resolve(_ visit: Now.Visit?) {
+        let match = isAway ? nil : visit.flatMap { bestMatch(for: $0.window) }
         if let match { lastMatched[match.project] = clock.now }
-        now = Now(visit: visit, match: match)
+        now = Now(visit: visit, match: match, isAway: isAway)
     }
 
-    /// The most specific fitting Matcher wins; equally specific ones go to the most recently
-    /// matched Project, then to the first by name.
+    /// The foreground window beats the calendar: a calendar event under way decides only when
+    /// the window matches no Project.
     private func bestMatch(for window: ActiveWindow) -> Now.Match? {
-        let candidates = projects
-            .filter { $0.status == .active }
-            .flatMap { project in
-                project.matchers.filter { fitting.fits($0, window) }.map { Now.Match(project: project.id, evidence: $0) }
+        let active = projects.filter { $0.status == .active }
+        let foreground = active.flatMap { project in
+            project.matchers.filter { fitting.fits($0, window) }.map { Now.Match(project: project.id, evidence: $0) }
+        }
+        if let match = mostSpecific(foreground) { return match }
+
+        let underWay = calendarEvents.filter { $0.isUnderWay(at: clock.now) }
+        let calendar = active.flatMap { project in
+            project.matchers.flatMap { matcher in
+                underWay.filter { fitting.fits(matcher, $0) }
+                    .map { Now.Match(project: project.id, evidence: matcher, event: $0) }
             }
-        // `max` keeps the first of equal elements, and candidates are in name order.
-        return candidates.max { a, b in
+        }
+        return mostSpecific(calendar)
+    }
+
+    /// The most specific Matcher wins; equally specific ones go to the most recently matched
+    /// Project, then to the first by name (candidates arrive in name order and `max` keeps the first).
+    private func mostSpecific(_ candidates: [Now.Match]) -> Now.Match? {
+        candidates.max { a, b in
             if a.evidence.specificity != b.evidence.specificity {
                 return a.evidence.specificity < b.evidence.specificity
             }
