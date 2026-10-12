@@ -6,7 +6,7 @@ final class VolatileStore: AssistantStore {
 
     func load() throws -> StoreSnapshot { snapshot }
 
-    func commit(_ change: Change, log entry: LogEntry) throws {
+    func write(_ change: Change, log entry: LogEntry) throws {
         snapshot.apply(change)
         snapshot.log.append(entry)
     }

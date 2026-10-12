@@ -1,7 +1,7 @@
 import Foundation
 
 extension Assistant {
-    /// Tasks in play (not deleted), oldest first.
+    /// Every Task not in the Deleted list, finished or not, oldest first.
     public var tasks: [Task] {
         tasksByID.values.filter { $0.deletedAt == nil }.sorted(by: Self.byCreation)
     }
@@ -45,7 +45,7 @@ extension Assistant {
 
     private func newTask(_ draft: TaskDraft) throws -> Task {
         Task(
-            id: Task.ID(), title: try Self.validTitle(draft.title), source: draft.source, backLink: draft.backLink,
+            id: Task.ID(), title: try Self.nonEmpty(draft.title, else: .emptyTitle), source: draft.source, backLink: draft.backLink,
             status: .open, created: clock.now, deadline: draft.deadline, project: draft.project,
             effort: draft.effort, kind: draft.kind, resumeAfterInterruption: false, deletedAt: nil)
     }
@@ -53,7 +53,8 @@ extension Assistant {
     // MARK: Changing
 
     public func editTask(_ id: Task.ID, _ changes: TaskChanges, by startedBy: StartedBy = .dara) throws {
-        let title = try changes.title.map(Self.validTitle)
+        let title = try changes.title.map { try Self.nonEmpty($0, else: .emptyTitle) }
+        if case let .some(project?) = changes.project, projectsByID[project] == nil { throw Failure.unknownProject(project) }
         try change(id, .editTask, "Edited", by: startedBy) { task in
             if let title { task.title = title }
             if let deadline = changes.deadline { task.deadline = deadline }
@@ -63,14 +64,18 @@ extension Assistant {
         }
     }
 
-    /// Makes the Task the Committed Task; the previous one goes back to open.
-    public func commitTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+    /// Makes the Task the Committed Task; the previous one goes back to open. As an interruption
+    /// (starting a Task just added), the previous one is also marked to resume.
+    public func commitTask(_ id: Task.ID, asInterruption: Bool = false, by startedBy: StartedBy = .dara) throws {
         let task = try existing(id)
-        try perform(.commitTask, "Started “\(task.title)”", by: startedBy, writing: committing(task, interrupting: false))
+        guard task.deletedAt == nil else { throw Failure.deletedTask(id) }
+        try perform(.commitTask, "Started “\(task.title)”", by: startedBy,
+                    writing: committing(task, interrupting: asInterruption))
     }
 
-    /// Only Dara marks a Task done; the assistant may at most suggest it.
+    /// Dara marks a Task done, directly or by asking in conversation; the helper alone may at most suggest it.
     public func completeTask(_ id: Task.ID, by startedBy: StartedBy = .dara) throws {
+        guard startedBy != .helper else { throw Failure.onlyDaraMarksDone }
         try change(id, .completeTask, "Completed", by: startedBy) { $0.status = .done }
     }
 
@@ -132,14 +137,18 @@ extension Assistant {
         return task
     }
 
-    private static func validTitle(_ title: String) throws -> String {
-        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { throw Failure.emptyTitle }
-        return title
-    }
-
     private static func byCreation(_ a: Task, _ b: Task) -> Bool {
         a.created == b.created ? a.title < b.title : a.created < b.created
+    }
+}
+
+extension Task.Status {
+    /// Open, committed or snoozed: work still to do.
+    public var isUnfinished: Bool {
+        switch self {
+        case .open, .committed, .snoozed: true
+        case .done, .dropped: false
+        }
     }
 }
 

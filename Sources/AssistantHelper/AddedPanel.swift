@@ -4,9 +4,7 @@ import AppKit
 /// Start now and Undo. Disappears on its own after a few seconds.
 @MainActor
 final class AddedPanel: NSObject {
-    private let panel = NSPanel(
-        contentRect: NSRect(x: 0, y: 0, width: 360, height: 64), styleMask: [.borderless, .nonactivatingPanel],
-        backing: .buffered, defer: true)
+    private let panel = NSPanel.themed(size: NSSize(width: 360, height: 64))
     private let message = NSTextField(labelWithString: "")
     private let startButton = NSButton(title: "Start now", target: nil, action: nil)
     private var hideTimer: Timer?
@@ -15,11 +13,6 @@ final class AddedPanel: NSObject {
 
     override init() {
         super.init()
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.contentView = ChamferedView(fill: Theme.ink, stroke: Theme.olive)
         message.font = Theme.display(13)
         message.textColor = Theme.paper
         message.lineBreakMode = .byTruncatingTail

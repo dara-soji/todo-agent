@@ -19,14 +19,14 @@ extension Assistant {
         name: String, shortName: String? = nil, matchers: [Matcher], by startedBy: StartedBy = .dara
     ) throws -> Project {
         let project = Project(
-            name: try Self.validName(name), shortName: shortName,
+            name: try Self.nonEmpty(name, else: .emptyName), shortName: shortName,
             matchers: try matchers.map(fitting.normalised))
         try perform(.declareProject, "Declared Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]))
         return project
     }
 
     public func renameProject(_ id: Project.ID, name: String, shortName: String? = nil, by startedBy: StartedBy = .dara) throws {
-        let name = try Self.validName(name)
+        let name = try Self.nonEmpty(name, else: .emptyName)
         try change(id, .editProject, "Renamed", by: startedBy) {
             $0.name = name
             $0.shortName = shortName ?? name
@@ -67,12 +67,6 @@ extension Assistant {
         guard var project = projectsByID[id] else { throw Failure.unknownProject(id) }
         edit(&project)
         try perform(kind, "\(verb) Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]))
-    }
-
-    private static func validName(_ name: String) throws -> String {
-        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else { throw Failure.emptyName }
-        return name
     }
 
     private static func byName(_ a: Project, _ b: Project) -> Bool {

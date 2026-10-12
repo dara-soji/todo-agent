@@ -8,6 +8,11 @@ public final class Assistant {
         case unknownLogEntry(LogEntry.ID)
         case emptyName
         case emptyTitle
+        /// The helper may at most suggest "done?"; Dara marks a Task done, directly or in conversation.
+        case onlyDaraMarksDone
+        case deletedTask(Task.ID)
+        /// At most one Task is committed; this Operation would leave two.
+        case secondCommittedTask
         /// The Tasks or Projects an entry wrote have changed since, so undoing it would lose that change.
         case changedSince(LogEntry.ID)
         /// The Guardrail placed the Operation in a tier this build can't run yet.
@@ -21,8 +26,9 @@ public final class Assistant {
     private let store: AssistantStore
     private let guardrail = Guardrail()
     let fitting: MatcherFitting
-    var projectsByID: [Project.ID: Project]
-    var tasksByID: [Task.ID: Task]
+    // Readable across the module, written only here, by `apply`, so nothing skips the Guardrail and the log.
+    private(set) var projectsByID: [Project.ID: Project]
+    private(set) var tasksByID: [Task.ID: Task]
     /// The Operation log, oldest first.
     public private(set) var operationLog: [LogEntry]
     /// When each Project last matched, to break ties between equally specific Matchers.
@@ -94,10 +100,11 @@ public final class Assistant {
     ) throws -> LogEntry {
         let tier = guardrail.tier(for: kind)
         guard tier == .auto else { throw Failure.notAllowed(kind, tier) }
+        guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
         let entry = LogEntry(
             id: LogEntry.ID(), at: clock.now, kind: kind, summary: summary, tier: tier, startedBy: startedBy,
             confirmation: .notNeeded, before: currentVersions(of: after), after: after, undoes: undoes)
-        try store.commit(after, log: entry)
+        try store.write(after, log: entry)
         apply(after)
         operationLog.append(entry)
         resolve(now.visit)
@@ -120,6 +127,20 @@ public final class Assistant {
         Change(
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
             projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() })
+    }
+
+    /// How many Tasks in play would be committed once `change` is written.
+    private func committedCount(after change: Change) -> Int {
+        var tasks = tasksByID
+        for task in change.tasks { tasks[task.id] = task }
+        return tasks.values.filter { $0.deletedAt == nil && $0.status == .committed }.count
+    }
+
+    /// Trimmed text, or `failure` if nothing is left.
+    static func nonEmpty(_ text: String, else failure: Failure) throws -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw failure }
+        return text
     }
 
     private func apply(_ change: Change) {

@@ -159,22 +159,19 @@ public final class SQLiteStore {
 }
 
 extension SQLiteStore: AssistantStore {
-    /// How long the Operation log is kept (pruning arrives with log retention).
-    static let logDays: Double = 90
-
+    /// Everything stored. A row that can't be read is logged and skipped rather than taking the whole
+    /// store down; the rest stays usable and persisted.
     public func load() throws -> StoreSnapshot {
-        let since = Date().addingTimeInterval(-Self.logDays * 24 * 60 * 60).timeIntervalSinceReferenceDate
-        return StoreSnapshot(
+        StoreSnapshot(
             projects: try loadProjects(),
-            tasks: try rows("SELECT json FROM tasks;", columns: 1).map { try decode(Task.self, $0[0]) },
-            log: try rows("SELECT json FROM operation_log WHERE at >= \(since) ORDER BY at, rowid;", columns: 1)
-                .map { try decode(LogEntry.self, $0[0]) })
+            tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
+            log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)))
     }
 
-    public func commit(_ change: Change, log entry: LogEntry) throws {
+    public func write(_ change: Change, log entry: LogEntry) throws {
         try run("BEGIN IMMEDIATE;")
         do {
-            for project in change.projects { try write(project) }
+            for project in change.projects { try upsert(project) }
             for task in change.tasks {
                 try execute("""
                     INSERT INTO tasks (id, json) VALUES (?, ?)
@@ -206,7 +203,7 @@ extension SQLiteStore: AssistantStore {
     }
 
     /// Inside the caller's transaction.
-    private func write(_ project: Project) throws {
+    private func upsert(_ project: Project) throws {
         let id = project.id.rawValue.uuidString
         try execute("""
             INSERT INTO projects (id, name, short_name, status) VALUES (?, ?, ?, ?)
@@ -223,7 +220,15 @@ extension SQLiteStore: AssistantStore {
         String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
-        try JSONDecoder().decode(type, from: Data(json.utf8))
+    /// Decodes each (id, json) row, skipping and logging any that can't be read.
+    private func readable<T: Decodable>(_ type: T.Type, _ rows: [[String]]) -> [T] {
+        rows.compactMap { row in
+            do {
+                return try JSONDecoder().decode(type, from: Data(row[1].utf8))
+            } catch {
+                NSLog("TodoAgent: skipped unreadable \(T.self) \(row[0]): \(error)")
+                return nil
+            }
+        }
     }
 }

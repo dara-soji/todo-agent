@@ -69,10 +69,10 @@ public struct LogEntry: Identifiable, Equatable, Sendable, Codable {
 }
 
 /// Persistence port. The helper's SQLite store conforms; tests use an in-memory fake.
-/// A commit writes an Operation's change and its log entry together, or nothing at all.
+/// A write stores an Operation's change and its log entry together, or nothing at all.
 public protocol AssistantStore {
     func load() throws -> StoreSnapshot
-    func commit(_ change: Change, log entry: LogEntry) throws
+    func write(_ change: Change, log entry: LogEntry) throws
 }
 
 /// Everything the store holds.

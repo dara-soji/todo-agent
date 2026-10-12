@@ -6,6 +6,8 @@ final class HotKey {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private let pressed: () -> Void
+    /// False when another app already owns the shortcut.
+    private(set) var isRegistered = false
 
     init(keyCode: Int = kVK_Space, modifiers: Int = optionKey, pressed: @escaping () -> Void) {
         self.pressed = pressed
@@ -17,8 +19,14 @@ final class HotKey {
             return noErr
         }
         // Unretained: the helper keeps this HotKey for its whole run.
-        InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
+        let installed = InstallEventHandler(
+            GetApplicationEventTarget(), callback, 1, &spec, Unmanaged.passUnretained(self).toOpaque(), &handler)
         let id = EventHotKeyID(signature: OSType(0x5444_4F41), id: 1)  // 'TDOA'
-        RegisterEventHotKey(UInt32(keyCode), UInt32(modifiers), id, GetApplicationEventTarget(), 0, &hotKey)
+        let registered = RegisterEventHotKey(UInt32(keyCode), UInt32(modifiers), id, GetApplicationEventTarget(), 0, &hotKey)
+        isRegistered = installed == noErr && registered == noErr
+        if !isRegistered {
+            // Usually another app owns the shortcut; Add task… in the menu still works.
+            NSLog("TodoAgent: couldn't register the quick-add shortcut (\(installed), \(registered))")
+        }
     }
 }

@@ -21,13 +21,13 @@ public struct MenuBar: Equatable, Sendable {
     /// The app and full window title, never shortened.
     public let window: String?
     /// The Committed Task's title, shown under Now.
-    public let committedTask: String?
+    public let committedTaskTitle: String?
 
     /// Longest menu-bar title, ellipsis included.
     static let titleLimit = 15
 
     init(_ now: Now, project: Project?, branch: String?, committedTask: Task?) {
-        self.committedTask = committedTask?.title
+        self.committedTaskTitle = committedTask?.title
         guard now.window != nil || now.match != nil else {
             title = "—"
             marker = .unknown

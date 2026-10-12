@@ -51,7 +51,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
 
         menu.addItem(header("Now"))
-        if let committed = menuBar.committedTask { menu.addItem(detail(committed)) }
+        if let committed = menuBar.committedTaskTitle { menu.addItem(detail(committed)) }
         menu.addItem(metadata(menuBar.nowDetail))
         if let evidence = menuBar.evidence { menu.addItem(metadata(evidence)) }
         if let window = menuBar.window { menu.addItem(metadata(window)) }

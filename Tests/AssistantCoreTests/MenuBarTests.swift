@@ -60,10 +60,10 @@ import AssistantCore
 
     @Test func dropdownShowsTheCommittedTaskUnderNow() throws {
         let assistant = makeAssistant()
-        #expect(assistant.menuBar.committedTask == nil)
+        #expect(assistant.menuBar.committedTaskTitle == nil)
 
         try assistant.quickAdd("Write the quick-add palette", start: true)
 
-        #expect(assistant.menuBar.committedTask == "Write the quick-add palette")
+        #expect(assistant.menuBar.committedTaskTitle == "Write the quick-add palette")
     }
 }

@@ -246,10 +246,10 @@ import AssistantCore
         let assistant = makeAssistant()
         let todo = try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
         assistant.receive(.activeWindow(app: code, windowTitle: "~/code/todo-agent"))
-        store.failCommits = true
+        store.failWrites = true
 
-        #expect(throws: InMemoryStore.CommitFailed.self) { try assistant.archiveProject(todo.id) }
-        #expect(throws: InMemoryStore.CommitFailed.self) {
+        #expect(throws: InMemoryStore.WriteFailed.self) { try assistant.archiveProject(todo.id) }
+        #expect(throws: InMemoryStore.WriteFailed.self) {
             try assistant.declareProject(name: "Other", matchers: [])
         }
 

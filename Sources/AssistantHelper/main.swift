@@ -62,27 +62,25 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
                 let task = try assistant.quickAdd(title, start: start)
                 let entry = assistant.operationLog.last
                 changed()
-                let destination = task.project.flatMap(assistant.project)?.shortName.uppercased() ?? "NO PROJECT"
+                let destination = Self.destination(task.project, in: assistant)
                 added.show(
                     start ? "Started “\(task.title)” · \(destination)" : "Added “\(task.title)” · \(destination)",
                     started: start,
-                    onStart: { Self.attempt(changed) { try assistant.commitTask(task.id) } },
-                    onUndo: { Self.attempt(changed) { if let entry { try assistant.undo(entry.id) } } })
+                    onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(task.id, asInterruption: true) } },
+                    onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry.id) } } })
             } catch {
                 NSSound.beep()
             }
         }
     }
 
-    /// Runs a change from a panel button; a refusal (e.g. the Task changed since) just beeps.
-    private static func attempt(_ changed: () -> Void, _ change: () throws -> Void) {
-        do { try change() } catch { NSSound.beep() }
-        changed()
+    private func openQuickAdd(_ assistant: Assistant) {
+        quickAdd.show(destination: Self.destination(assistant.now.project, in: assistant))
     }
 
-    private func openQuickAdd(_ assistant: Assistant) {
-        let menuBar = assistant.menuBar
-        quickAdd.show(destination: menuBar.marker == .project ? menuBar.title : "NO PROJECT")
+    /// Where a quick-added Task goes, as the palette and the confirmation name it.
+    private static func destination(_ project: Project.ID?, in assistant: Assistant) -> String {
+        project.flatMap(assistant.project)?.shortName.uppercased() ?? "NO PROJECT"
     }
 
     /// The Assistant over the SQLite store, or, if that can't be opened or read, over a store

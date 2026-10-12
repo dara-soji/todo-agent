@@ -14,22 +14,17 @@ final class TasksMenu: NSObject {
 
     func markDoneItem() -> NSMenuItem? {
         guard let committed = assistant.committedTask else { return nil }
-        return action("Mark done", #selector(complete(_:)), committed.id)
+        return menuItem("Mark done", #selector(complete(_:)), committed.id)
     }
 
     func tasksItem() -> NSMenuItem {
         let root = NSMenuItem(title: "Tasks", action: nil, keyEquivalent: "")
         let menu = NSMenu()
-        let inPlay = assistant.tasks.filter { task in
-            switch task.status {
-            case .open, .committed, .snoozed: true
-            case .done, .dropped: false
-            }
-        }
-        if inPlay.isEmpty {
+        let unfinished = assistant.tasks.filter(\.status.isUnfinished)
+        if unfinished.isEmpty {
             menu.addItem(withTitle: "No open Tasks", action: nil, keyEquivalent: "").isEnabled = false
         }
-        for task in inPlay {
+        for task in unfinished {
             menu.addItem(taskItem(task))
         }
         root.submenu = menu
@@ -43,7 +38,7 @@ final class TasksMenu: NSObject {
         let menu = NSMenu()
         menu.addItem(withTitle: "Restore", action: nil, keyEquivalent: "").isEnabled = false
         for task in deleted {
-            let item = action(task.title, #selector(restore(_:)), task.id)
+            let item = menuItem(task.title, #selector(restore(_:)), task.id)
             item.indentationLevel = 1
             menu.addItem(item)
         }
@@ -54,17 +49,17 @@ final class TasksMenu: NSObject {
     private func taskItem(_ task: Task) -> NSMenuItem {
         let item = NSMenuItem(title: Self.label(task), action: nil, keyEquivalent: "")
         let menu = NSMenu()
-        if task.status != .committed { menu.addItem(action("Start", #selector(start(_:)), task.id)) }
-        menu.addItem(action("Mark done", #selector(complete(_:)), task.id))
+        if task.status != .committed { menu.addItem(menuItem("Start", #selector(start(_:)), task.id)) }
+        menu.addItem(menuItem("Mark done", #selector(complete(_:)), task.id))
         let snooze = NSMenuItem(title: "Snooze", action: nil, keyEquivalent: "")
         snooze.submenu = NSMenu()
-        snooze.submenu?.addItem(action("1 hour", #selector(snoozeHour(_:)), task.id))
-        snooze.submenu?.addItem(action("Till tomorrow", #selector(snoozeTomorrow(_:)), task.id))
-        snooze.submenu?.addItem(action("Waiting on someone…", #selector(snoozeWaiting(_:)), task.id))
+        snooze.submenu?.addItem(menuItem("1 hour", #selector(snoozeHour(_:)), task.id))
+        snooze.submenu?.addItem(menuItem("Till tomorrow", #selector(snoozeTomorrow(_:)), task.id))
+        snooze.submenu?.addItem(menuItem("Waiting on someone…", #selector(snoozeWaiting(_:)), task.id))
         menu.addItem(snooze)
-        menu.addItem(action("Drop", #selector(drop(_:)), task.id))
+        menu.addItem(menuItem("Drop", #selector(drop(_:)), task.id))
         menu.addItem(.separator())
-        menu.addItem(action("Delete", #selector(delete(_:)), task.id))
+        menu.addItem(menuItem("Delete", #selector(delete(_:)), task.id))
         item.submenu = menu
         return item
     }
@@ -78,7 +73,7 @@ final class TasksMenu: NSObject {
         }
     }
 
-    // MARK: Actions
+    // MARK: Menu handlers
 
     @objc private func start(_ sender: NSMenuItem) { attempt(sender) { try assistant.commitTask($0) } }
     @objc private func complete(_ sender: NSMenuItem) { attempt(sender) { try assistant.completeTask($0) } }
@@ -114,19 +109,10 @@ final class TasksMenu: NSObject {
 
     private func attempt(_ sender: NSMenuItem, _ change: (Task.ID) throws -> Void) {
         guard let id = sender.representedObject as? Task.ID else { return }
-        do {
-            try change(id)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Couldn't change the Task"
-            alert.informativeText = "\(error)"
-            NSApp.activate()
-            alert.runModal()
-        }
-        onChange()
+        Attempt.run("Couldn't change the Task", then: onChange) { try change(id) }
     }
 
-    private func action(_ title: String, _ selector: Selector, _ id: Task.ID) -> NSMenuItem {
+    private func menuItem(_ title: String, _ selector: Selector, _ id: Task.ID) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
         item.representedObject = id

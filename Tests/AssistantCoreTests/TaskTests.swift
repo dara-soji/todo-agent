@@ -56,6 +56,17 @@ import AssistantCore
         #expect(assistant.tasks.filter { $0.status == .committed }.count == 1)
     }
 
+    @Test func startingFromTheAddedPanelIsAnInterruptionToo() throws {
+        let assistant = makeAssistant()
+        let first = try assistant.quickAdd("Refactor the store", start: true)
+        let added = try assistant.quickAdd("Reply to the landlord")
+
+        try assistant.commitTask(added.id, asInterruption: true)
+
+        #expect(assistant.committedTask?.id == added.id)
+        #expect(assistant.task(first.id)?.resumeAfterInterruption == true)
+    }
+
     // MARK: Statuses
 
     @Test func committingATaskUncommitsThePreviousOne() throws {
@@ -142,6 +153,33 @@ import AssistantCore
         #expect(task.backLink == "~/code/todo-agent")
     }
 
+    @Test func onlyDaraOrAConversationMarksATaskDoneNeverTheHelperAlone() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Ship it")
+
+        #expect(throws: Assistant.Failure.onlyDaraMarksDone) { try assistant.completeTask(task.id, by: .helper) }
+        #expect(assistant.task(task.id)?.status == .open)
+    }
+
+    @Test func aDeletedTaskCannotBeCommitted() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Gone")
+        try assistant.deleteTask(task.id)
+
+        #expect(throws: Assistant.Failure.deletedTask(task.id)) { try assistant.commitTask(task.id) }
+        #expect(assistant.committedTask == nil)
+    }
+
+    @Test func aTaskCannotBeFiledUnderAnUnknownProject() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Somewhere")
+        let missing = Project.ID()
+
+        #expect(throws: Assistant.Failure.unknownProject(missing)) {
+            try assistant.editTask(task.id, TaskChanges(project: .some(missing)))
+        }
+    }
+
     @Test func editingAnUnknownTaskFails() {
         let assistant = makeAssistant()
         let missing = Task.ID()
@@ -190,9 +228,9 @@ import AssistantCore
     @Test func aTaskChangeThatCannotBeSavedIsNotApplied() throws {
         let assistant = makeAssistant()
         let task = try assistant.quickAdd("Stay open")
-        store.failCommits = true
+        store.failWrites = true
 
-        #expect(throws: InMemoryStore.CommitFailed.self) { try assistant.completeTask(task.id) }
+        #expect(throws: InMemoryStore.WriteFailed.self) { try assistant.completeTask(task.id) }
 
         #expect(assistant.task(task.id)?.status == .open)
         #expect(assistant.operationLog.count == 1)
@@ -244,6 +282,19 @@ import AssistantCore
 
         #expect(throws: Assistant.Failure.changedSince(added.id)) { try assistant.undo(added.id) }
         #expect(assistant.task(task.id)?.status == .done)
+    }
+
+    @Test func undoNeverLeavesTwoCommittedTasks() throws {
+        let assistant = makeAssistant()
+        let a = try assistant.quickAdd("A", start: true)
+        try assistant.deleteTask(a.id)
+        let deletion = try #require(assistant.operationLog.last)
+        let b = try assistant.quickAdd("B", start: true)
+
+        #expect(throws: Assistant.Failure.secondCommittedTask) { try assistant.undo(deletion.id) }
+
+        #expect(assistant.committedTask?.id == b.id)
+        #expect(assistant.deletedTasks.map(\.id) == [a.id])
     }
 
     @Test func undoingAProjectEditPutsTheProjectBack() throws {

@@ -3,17 +3,17 @@ import AssistantCore
 /// Persistence fake: keeps everything in memory so tests can check it survives a new Assistant,
 /// and can be told to fail commits.
 final class InMemoryStore: AssistantStore {
-    struct CommitFailed: Error {}
+    struct WriteFailed: Error {}
 
     private var snapshot = StoreSnapshot()
-    var failCommits = false
+    var failWrites = false
 
     func load() throws -> StoreSnapshot {
         snapshot
     }
 
-    func commit(_ change: Change, log entry: LogEntry) throws {
-        if failCommits { throw CommitFailed() }
+    func write(_ change: Change, log entry: LogEntry) throws {
+        if failWrites { throw WriteFailed() }
         snapshot.apply(change)
         snapshot.log.append(entry)
     }

@@ -5,11 +5,21 @@ import AppKit
 final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     private final class KeyablePanel: NSPanel {
         override var canBecomeKey: Bool { true }
+        /// ⌘↩ is a key equivalent, so it never reaches the text field as a newline.
+        var onCommandReturn: () -> Void = {}
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            if event.keyCode == 36, event.modifierFlags.contains(.command) {
+                onCommandReturn()
+                return true
+            }
+            return super.performKeyEquivalent(with: event)
+        }
     }
 
-    private let panel = KeyablePanel(
-        contentRect: NSRect(x: 0, y: 0, width: 520, height: 92), styleMask: [.borderless, .nonactivatingPanel],
-        backing: .buffered, defer: true)
+    private let panel = NSPanel.themed(KeyablePanel.self, size: NSSize(width: 520, height: 92))
+    /// The app Dara was in, given focus back when the palette closes.
+    private var previousApp: NSRunningApplication?
     private let heading = NSTextField(labelWithString: "")
     private let field = NSTextField()
     private let hint = NSTextField(labelWithString: "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE")
@@ -18,11 +28,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
 
     override init() {
         super.init()
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.contentView = ChamferedView(fill: Theme.ink, stroke: Theme.olive)
+        panel.onCommandReturn = { [weak self] in self?.submit(start: true) }
 
         heading.font = Theme.mono(10, weight: .bold)
         heading.textColor = Theme.accent
@@ -61,6 +67,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         if let screen = NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: screen.midX - panel.frame.width / 2, y: screen.maxY - screen.height / 3))
         }
+        previousApp = NSWorkspace.shared.frontmostApplication
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
@@ -69,48 +76,25 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
         switch selector {
         case #selector(NSResponder.insertNewline(_:)):
-            let start = NSApp.currentEvent?.modifierFlags.contains(.command) ?? false
-            let title = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            panel.orderOut(nil)
-            if !title.isEmpty { onSubmit(title, start) }
+            submit(start: false)
             return true
         case #selector(NSResponder.cancelOperation(_:)):
-            panel.orderOut(nil)
+            close()
             return true
         default:
             return false
         }
     }
-}
 
-/// A panel background with cut corners, per the reference theme.
-final class ChamferedView: NSView {
-    private let fill: NSColor
-    private let stroke: NSColor
-    private let cut: CGFloat = 10
-
-    init(fill: NSColor, stroke: NSColor) {
-        self.fill = fill
-        self.stroke = stroke
-        super.init(frame: .zero)
+    private func submit(start: Bool) {
+        let title = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        close()
+        if !title.isEmpty { onSubmit(title, start) }
     }
 
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath()
-        path.move(to: NSPoint(x: r.minX + cut, y: r.maxY))
-        path.line(to: NSPoint(x: r.maxX, y: r.maxY))
-        path.line(to: NSPoint(x: r.maxX, y: r.minY + cut))
-        path.line(to: NSPoint(x: r.maxX - cut, y: r.minY))
-        path.line(to: NSPoint(x: r.minX, y: r.minY))
-        path.line(to: NSPoint(x: r.minX, y: r.maxY - cut))
-        path.close()
-        fill.setFill()
-        path.fill()
-        stroke.setStroke()
-        path.lineWidth = 1
-        path.stroke()
+    private func close() {
+        panel.orderOut(nil)
+        previousApp?.activate()
+        previousApp = nil
     }
 }
