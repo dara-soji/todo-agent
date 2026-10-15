@@ -96,6 +96,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 
     /// Quitting ends every conversation, so pending Asks are logged as expired, not run.
     func applicationWillTerminate(_ notification: Notification) {
+        mailTriage?.stop()
         assistant?.expireAllAsks()
         assistant?.closeNowHistory()
     }

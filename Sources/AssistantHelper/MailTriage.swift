@@ -21,15 +21,20 @@ final class MailTriage {
     }
 
     func start() {
-        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { _ in
-            MainActor.assumeIsolated { self.check() }
+        timer = Timer.scheduledTimer(withTimeInterval: Self.interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.check() }
         }
         wake = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { _ in
-            MainActor.assumeIsolated { self.check() }
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.check() }
         }
         check()
+    }
+
+    func stop() {
+        timer?.invalidate()
+        if let wake { NSWorkspace.shared.notificationCenter.removeObserver(wake) }
     }
 
     func check() {

@@ -427,7 +427,10 @@ public final class Assistant {
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
             projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() },
             settings: change.settings.map { _ in settings },
-            suggestions: change.suggestions.compactMap { suggestionsByThread[$0.threadID] })
+            // A Suggestion new to the store would be undone into a dismissed one.
+            suggestions: change.suggestions.map { suggestion in
+                suggestionsByThread[suggestion.threadID] ?? { var undone = suggestion; undone.status = .dismissed; return undone }()
+            })
     }
 
     /// How many Tasks in play would be committed once `change` is written.

@@ -89,7 +89,7 @@ final class SuggestionsMenu: NSObject {
             let alert = NSAlert()
             alert.messageText = "Connect Gmail"
             alert.informativeText = """
-                Paste the client ID and secret of your own Google OAuth desktop client (see docs/adr/0003). \
+                Paste the client ID and secret of your own Google Cloud OAuth client (type: Desktop app). \
                 TodoAgent asks only to read Gmail. Both are kept in your Keychain.
                 """
             alert.addButton(withTitle: "Continue")

@@ -3,19 +3,28 @@ import Testing
 import AssistantCore
 import AssistantTestSupport
 
-/// A fake Gmail: hands out messages after the cursor it is given.
+/// A fake Gmail: hands out messages after the cursor it is given, and records whose bodies were read.
 @MainActor
 final class FakeMailSource: MailSource {
     var messages: [EmailMessage] = []
+    var bodies: [String: String] = [:]
+    var bodiesRead: [String] = []
     var cursorsAskedFor: [String?] = []
     var nextCursor = "h1"
     var fails = false
+    var whileReading: (EmailMessage) -> Void = { _ in }
 
     func fetchNew(after cursor: String?) async throws -> MailBatch {
         cursorsAskedFor.append(cursor)
         if fails { throw URLError(.notConnectedToInternet) }
         defer { messages = [] }
         return MailBatch(messages: messages, cursor: nextCursor)
+    }
+
+    func plainText(of message: EmailMessage) async throws -> String {
+        bodiesRead.append(message.subject)
+        whileReading(message)
+        return bodies[message.messageID] ?? ""
     }
 }
 
@@ -25,9 +34,19 @@ final class FakeTriager: EmailTriager {
     var seen: [TriageInput] = []
     var answer: (TriageInput) -> (EmailTier, String, Date?) = { input in (.action, "Reply to \(input.from)", nil) }
     var failOn: String?
+    var refuseOn: String?
+
+    struct Refused: BilledFailure {
+        let call: APICall
+    }
 
     func triage(_ input: TriageInput) async throws -> TriageAnswer {
         if input.subject == failOn { throw URLError(.timedOut) }
+        if input.subject == refuseOn {
+            throw Refused(call: APICall(
+                at: Date(timeIntervalSince1970: 0), purpose: .triage, model: "claude-haiku-5-5",
+                inputTokens: 500, outputTokens: 2, contentKind: .emailExcerpt))
+        }
         seen.append(input)
         let (tier, summary, deadline) = answer(input)
         let call = APICall(
@@ -56,9 +75,16 @@ final class FakeTriager: EmailTriager {
         _ subject: String, from: String = "Sam <sam@work.example>", thread: String? = nil,
         labels: [String] = ["INBOX"], unsubscribe: Bool = false, body: String = "Can you send the invoice by Friday?"
     ) -> EmailMessage {
-        EmailMessage(
+        let message = EmailMessage(
             threadID: thread ?? "t-\(subject)", messageID: "m-\(subject)-\(UUID().uuidString)", from: from,
-            subject: subject, labels: labels, hasListUnsubscribe: unsubscribe, plainText: body, receivedAt: clock.now)
+            subject: subject, labels: labels, hasListUnsubscribe: unsubscribe, receivedAt: clock.now)
+        mail.bodies[message.messageID] = body
+        return message
+    }
+
+    func accept(_ assistant: Assistant, _ id: Suggestion.ID) throws -> Task {
+        try assistant.acceptSuggestion(id)
+        return try #require(assistant.tasks.first { $0.source == .email })
     }
 
     // MARK: Rules first
@@ -80,6 +106,15 @@ final class FakeTriager: EmailTriager {
 
         await runner(assistant).run()
 
+        #expect(triager.seen.map(\.subject) == ["Invoice"])
+        #expect(mail.bodiesRead == ["Invoice"])  // Bulk and Excluded mail is never even read.
+    }
+
+    @Test(arguments: ["no-reply@x.example", "noreply@x.example", "Do_Not_Reply <donotreply@x.example>", "do-not-reply@x.example"])
+    func noReplySendersAreBulk(_ sender: String) async {
+        let assistant = makeAssistant()
+        mail.messages = [email("Receipt", from: sender), email("Invoice", from: "replies@x.example")]
+        await runner(assistant).run()
         #expect(triager.seen.map(\.subject) == ["Invoice"])
     }
 
@@ -141,7 +176,7 @@ final class FakeTriager: EmailTriager {
         await runner(assistant).run()
         let suggestion = try #require(assistant.suggestions.first)
 
-        let task = try assistant.acceptSuggestion(suggestion.id)
+        let task = try accept(assistant, suggestion.id)
 
         #expect(task.title == "Send Sam the invoice")
         #expect(task.source == .email)
@@ -155,7 +190,7 @@ final class FakeTriager: EmailTriager {
         let assistant = makeAssistant()
         mail.messages = [email("Invoice")]
         await runner(assistant).run()
-        let task = try assistant.acceptSuggestion(try #require(assistant.suggestions.first).id)
+        let task = try accept(assistant, try #require(assistant.suggestions.first).id)
 
         try assistant.undo(try #require(assistant.operationLog.last).id)
 
@@ -176,6 +211,53 @@ final class FakeTriager: EmailTriager {
         #expect(triager.seen.map(\.subject) == ["First"])
     }
 
+    @Test func anEmptySummaryFallsBackToTheSubjectAndLongOnesAreCut() async throws {
+        let assistant = makeAssistant()
+        triager.answer = { input in (.action, input.subject == "Plain" ? " " : String(repeating: "word ", count: 50), nil) }
+        mail.messages = [email("Plain"), email("Wordy")]
+
+        await runner(assistant).run()
+
+        let titles = Set(assistant.suggestions.map(\.title))
+        #expect(titles.contains("Plain"))
+        #expect(titles.contains { $0.count == 120 && $0.hasSuffix("…") })
+    }
+
+    @Test func acceptingWhenTightenedAsksAndIsNotOfferedTwice() async throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.acceptSuggestion)
+        mail.messages = [email("Invoice")]
+        await runner(assistant).run()
+        let suggestion = try #require(assistant.suggestions.first)
+
+        guard case .pending = try assistant.acceptSuggestion(suggestion.id) else {
+            Issue.record("a tightened accept should ask"); return
+        }
+        #expect(assistant.tasks.isEmpty)
+        #expect(assistant.suggestions.isEmpty)
+        #expect(throws: Assistant.Failure.unknownSuggestion(suggestion.id)) { try assistant.acceptSuggestion(suggestion.id) }
+
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+        #expect(assistant.tasks.map(\.title) == ["Reply to Sam <sam@work.example>"])
+    }
+
+    @Test func undoingADismissBringsItBackForAFreshWeek() async throws {
+        let assistant = makeAssistant()
+        mail.messages = [email("Invoice")]
+        await runner(assistant).run()
+        clock.advance(minutes: 6 * 24 * 60)
+        try assistant.dismissSuggestion(try #require(assistant.suggestions.first).id)
+        clock.advance(minutes: 2 * 24 * 60)
+
+        try assistant.undo(try #require(assistant.operationLog.last).id)
+        assistant.receive(.userIdle(seconds: 0))
+        #expect(assistant.suggestions.count == 1)
+
+        clock.advance(minutes: 7 * 24 * 60)
+        assistant.receive(.userIdle(seconds: 0))
+        #expect(assistant.suggestions.isEmpty)
+    }
+
     @Test func dismissingDropsItAndALaterMessageOnTheThreadDoesNotBringItBack() async throws {
         let assistant = makeAssistant()
         mail.messages = [email("Invoice", thread: "thread-1")]
@@ -194,7 +276,7 @@ final class FakeTriager: EmailTriager {
         let assistant = makeAssistant()
         mail.messages = [email("Invoice", thread: "thread-1")]
         await runner(assistant).run()
-        try assistant.acceptSuggestion(try #require(assistant.suggestions.first).id)
+        _ = try accept(assistant, try #require(assistant.suggestions.first).id)
 
         mail.messages = [email("Re: Invoice", thread: "thread-1")]
         await runner(assistant).run()
@@ -261,19 +343,72 @@ final class FakeTriager: EmailTriager {
 
     @Test func aFailureKeepsTheCursorSoNothingIsMissed() async throws {
         let assistant = makeAssistant()
+        let triage = runner(assistant)
         mail.nextCursor = "h1"
-        await runner(assistant).run()
+        await triage.run()
 
         mail.nextCursor = "h2"
         mail.messages = [email("Invoice"), email("Breaks")]
         triager.failOn = "Breaks"
-        await runner(assistant).run()
+        await triage.run()
 
         triager.failOn = nil
         mail.messages = [email("Invoice"), email("Breaks")]
-        await runner(assistant).run()
+        await triage.run()
 
         #expect(mail.cursorsAskedFor == [nil, "h1", "h1"])
         #expect(assistant.suggestions.count == 2)
+        #expect(triager.seen.map(\.subject) == ["Invoice", "Breaks"])  // What was sorted isn't sent again.
+    }
+
+    @Test func noiseAlreadySortedIsNotSentAgainWhenTheBatchIsRetried() async throws {
+        let assistant = makeAssistant()
+        let triage = runner(assistant)
+        triager.answer = { _ in (.noise, "x", nil) }
+        let batch = [email("Meh"), email("Breaks")]
+        mail.messages = batch
+        triager.failOn = "Breaks"
+        await triage.run()
+
+        triager.failOn = nil
+        mail.messages = batch
+        await triage.run()
+
+        #expect(triager.seen.map(\.subject) == ["Meh", "Breaks"])
+    }
+
+    @Test func aSenderExcludedWhileTheBodyIsReadIsNotSent() async throws {
+        let assistant = makeAssistant()
+        mail.whileReading = { _ in try? assistant.exclude(.sender("@work.example")) }
+        mail.messages = [email("Invoice")]
+
+        await runner(assistant).run()
+
+        #expect(triager.seen.isEmpty)
+    }
+
+    @Test func aRefusalIsAuditedAndCountsAsHandled() async throws {
+        let assistant = makeAssistant()
+        let triage = runner(assistant)
+        mail.nextCursor = "h2"
+        mail.messages = [email("Odd one")]
+        triager.refuseOn = "Odd one"
+
+        await triage.run()
+
+        #expect(try store.load().audit.count == 1)
+        #expect(assistant.mailCursor == "h2")
+    }
+
+    @Test func aFailedFetchChangesNothing() async throws {
+        let assistant = makeAssistant()
+        mail.fails = true
+        mail.messages = [email("Invoice")]
+
+        await runner(assistant).run()
+
+        #expect(assistant.mailCursor == nil)
+        #expect(assistant.suggestions.isEmpty)
+        #expect(triager.seen.isEmpty)
     }
 }

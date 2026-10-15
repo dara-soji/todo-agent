@@ -1,7 +1,7 @@
 import Foundation
 
-/// One email as the Gmail adapter reads it. Only `TriageInput` ever leaves the Mac, and the body is
-/// never stored.
+/// One email's headers and labels, as the Gmail adapter lists it. Its body is read separately, and
+/// only once the rules let it through; only `TriageInput` ever leaves the Mac, and no body is stored.
 public struct EmailMessage: Equatable, Sendable {
     public let threadID: String
     public let messageID: String
@@ -11,13 +11,11 @@ public struct EmailMessage: Equatable, Sendable {
     /// Gmail label ids, e.g. "INBOX", "SENT", "CATEGORY_PROMOTIONS".
     public let labels: [String]
     public let hasListUnsubscribe: Bool
-    /// The plain-text body, attachments left out.
-    public let plainText: String
     public let receivedAt: Date
 
     public init(
         threadID: String, messageID: String, from: String, subject: String, labels: [String],
-        hasListUnsubscribe: Bool, plainText: String, receivedAt: Date
+        hasListUnsubscribe: Bool, receivedAt: Date
     ) {
         self.threadID = threadID
         self.messageID = messageID
@@ -25,7 +23,6 @@ public struct EmailMessage: Equatable, Sendable {
         self.subject = subject
         self.labels = labels
         self.hasListUnsubscribe = hasListUnsubscribe
-        self.plainText = plainText
         self.receivedAt = receivedAt
     }
 }
@@ -42,10 +39,12 @@ public struct MailBatch: Sendable {
 }
 
 /// Port: the mailbox. With no cursor it starts a few days back; otherwise it returns what arrived
-/// after the cursor.
+/// after the cursor, headers only.
 @MainActor
 public protocol MailSource: AnyObject {
     func fetchNew(after cursor: String?) async throws -> MailBatch
+    /// One message's plain-text body, attachments left out. Asked for only for mail Triage sends.
+    func plainText(of message: EmailMessage) async throws -> String
 }
 
 /// How Triage sorts an email.
@@ -116,9 +115,11 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     public var status: Status
 }
 
-/// Reads new mail, drops bulk mail and Excluded senders by rule, has Haiku sort the rest, and turns
-/// Action emails into Suggestions. The cursor only moves on once every email in the batch was
-/// handled, so nothing is missed after a failure, sleep or restart.
+/// Reads new mail, drops bulk mail and Excluded senders by rule (their bodies are never read), has
+/// Haiku sort the rest, and turns Action emails into Suggestions. The cursor only moves on once
+/// every email in the batch was handled, so nothing is missed after a network failure, sleep or
+/// restart. A billed non-answer (a refusal, say) counts as handled: retrying it would only fail and
+/// cost again. Emails already sorted are remembered, so a retried batch isn't sent twice.
 @MainActor
 public final class TriageRunner {
     /// How much of the plain text Haiku sees.
@@ -128,6 +129,9 @@ public final class TriageRunner {
     private let mail: MailSource
     private let triager: EmailTriager
     private var running = false
+    /// Message ids already sorted this run of the helper, so a retried batch skips them.
+    private var sorted: Set<String> = []
+    static let sortedLimit = 5_000
 
     public init(assistant: Assistant, mail: MailSource, triager: EmailTriager) {
         self.assistant = assistant
@@ -140,24 +144,42 @@ public final class TriageRunner {
         running = true
         defer { running = false }
         assistant.expireSuggestions()
-        guard let batch = try? await mail.fetchNew(after: assistant.mailCursor) else { return }
+        let batch: MailBatch
+        do {
+            batch = try await mail.fetchNew(after: assistant.mailCursor)
+        } catch {
+            return NSLog("TodoAgent: mail fetch failed: \(type(of: error))")
+        }
         var handledAll = true
         for message in batch.messages {
             // Checked as each email comes up: the exclude list can change mid-batch.
-            guard assistant.needsTriage(message) else { continue }
-            let input = TriageInput(
-                from: message.from, subject: message.subject,
-                excerpt: String(message.plainText.prefix(Self.excerptLimit)), receivedAt: message.receivedAt)
+            guard !sorted.contains(message.messageID), assistant.needsTriage(message) else { continue }
             do {
+                let text = try await mail.plainText(of: message)
+                // Checked again: the list may have changed while the body was read.
+                guard assistant.needsTriage(message) else { continue }
+                let input = TriageInput(
+                    from: message.from, subject: message.subject, excerpt: String(text.prefix(Self.excerptLimit)),
+                    receivedAt: message.receivedAt)
                 let answer = try await triager.triage(input)
                 if let call = answer.call { assistant.recordAPICall(call) }
                 if answer.tier == .action { try assistant.suggest(from: message, answer) }
+                remember(message)
+            } catch let billed as BilledFailure {
+                assistant.recordAPICall(billed.call)
+                remember(message)
             } catch {
-                if let billed = error as? BilledFailure { assistant.recordAPICall(billed.call) }
                 handledAll = false
             }
         }
         if handledAll { assistant.advanceMailCursor(to: batch.cursor) }
+    }
+}
+
+extension TriageRunner {
+    private func remember(_ message: EmailMessage) {
+        if sorted.count >= Self.sortedLimit { sorted.removeAll() }
+        sorted.insert(message.messageID)
     }
 }
 
@@ -169,9 +191,11 @@ extension Assistant {
     /// The longest Suggestion title kept.
     static let suggestionTitleLimit = 120
 
-    /// Open Suggestions, oldest first.
+    /// Open Suggestions, oldest first. One already waiting in an Ask isn't offered again.
     public var suggestions: [Suggestion] {
-        suggestionsByThread.values.filter { $0.status == .open }.sorted { $0.created < $1.created }
+        let held = asks.reduce(into: Set<UUID>()) { $0.formUnion($1.touches) }
+        return suggestionsByThread.values.filter { $0.status == .open && !held.contains($0.id.rawValue) }
+            .sorted { $0.created < $1.created }
     }
 
     /// Whether Haiku should see this email: inbox mail Dara didn't send, not bulk by rule, not from
@@ -215,15 +239,14 @@ extension Assistant {
 
     /// Accepts a Suggestion: it becomes a Task, with the guessed deadline, linked to the thread.
     @discardableResult
-    public func acceptSuggestion(_ id: Suggestion.ID, by startedBy: StartedBy = .dara) throws -> Task {
+    public func acceptSuggestion(_ id: Suggestion.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         var suggestion = try openSuggestion(id)
         suggestion.status = .accepted
         let task = Task(
             id: Task.ID(), title: suggestion.title, source: suggestion.source, backLink: suggestion.backLink,
             status: .open, created: clock.now, deadline: suggestion.guessedDeadline, project: nil, effort: nil, kind: nil)
-        try perform(.acceptSuggestion, "Accepted “\(suggestion.title)”", by: startedBy,
-                    writing: Change(tasks: [task], suggestions: [suggestion]))
-        return tasksByID[task.id] ?? task
+        return try perform(.acceptSuggestion, "Accepted “\(suggestion.title)”", by: startedBy,
+                           writing: Change(tasks: [task], suggestions: [suggestion]))
     }
 
     @discardableResult
@@ -235,14 +258,21 @@ extension Assistant {
     }
 
     private func openSuggestion(_ id: Suggestion.ID) throws -> Suggestion {
-        guard let suggestion = suggestionsByThread.values.first(where: { $0.id == id && $0.status == .open })
+        guard let suggestion = suggestions.first(where: { $0.id == id })
         else { throw Failure.unknownSuggestion(id) }
         return suggestion
     }
 
-    /// Unanswered Suggestions past their week go, without a word.
+    /// Unanswered Suggestions past their week go, without a word. The week runs from when it was made,
+    /// or from when an undo last brought it back.
     func expireSuggestions() {
-        let due = suggestions.filter { clock.now.timeIntervalSince($0.created) >= Self.suggestionsExpireAfter }
+        let due = suggestions.filter { suggestion in
+            guard clock.now.timeIntervalSince(suggestion.created) >= Self.suggestionsExpireAfter else { return false }
+            let reopened = operationLog.last { entry in
+                entry.after.suggestions.contains { $0.id == suggestion.id && $0.status == .open }
+            }?.at ?? suggestion.created
+            return clock.now.timeIntervalSince(reopened) >= Self.suggestionsExpireAfter
+        }
         guard !due.isEmpty else { return }
         try? writeUnlogged(Change(suggestions: due.map { var expired = $0; expired.status = .expired; return expired }))
     }

@@ -36,6 +36,10 @@ struct KeychainItem {
         return String(decoding: data, as: UTF8.self)
     }
 
+    func delete() {
+        SecItemDelete(query as CFDictionary)
+    }
+
     /// Replaces any existing value.
     func write(_ value: String) throws {
         SecItemDelete(query as CFDictionary)

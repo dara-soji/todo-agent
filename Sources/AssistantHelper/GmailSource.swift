@@ -3,7 +3,8 @@ import Foundation
 
 /// The mailbox port over the Gmail REST API, read-only. The first run starts from the profile's
 /// history id and reads the last three days of inbox mail; after that, history.list from the stored
-/// cursor. Bodies are read into memory for Triage and never kept.
+/// cursor. Listing reads headers only; a body is read, into memory, only for mail Triage sends, and
+/// never kept.
 @MainActor
 final class GmailSource: MailSource {
     private static let base = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/")!
@@ -51,6 +52,9 @@ final class GmailSource: MailSource {
             ids += (json["messages"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
             page = json["nextPageToken"] as? String
         } while page != nil && ids.count < Self.firstRunLimit
+        if page != nil || ids.count > Self.firstRunLimit {
+            NSLog("TodoAgent: first Gmail run read the newest \(Self.firstRunLimit) inbox messages only")
+        }
         return MailBatch(messages: try await messages(Array(ids.prefix(Self.firstRunLimit))), cursor: history)
     }
 
@@ -76,12 +80,19 @@ final class GmailSource: MailSource {
         return MailBatch(messages: try await messages(ids), cursor: latest)
     }
 
-    /// Each message in full, oldest first. One deleted since it was listed is skipped.
+    func plainText(of message: EmailMessage) async throws -> String {
+        let json = try await get("messages/\(message.messageID)", [URLQueryItem(name: "format", value: "full")])
+        return String(Self.text(in: json["payload"] as? [String: Any] ?? [:]).prefix(Self.textLimit))
+    }
+
+    /// Each message's headers and labels, oldest first. One deleted since it was listed is skipped.
     private func messages(_ ids: [String]) async throws -> [EmailMessage] {
+        let metadata = [URLQueryItem(name: "format", value: "metadata")]
+            + ["From", "Subject", "List-Unsubscribe"].map { URLQueryItem(name: "metadataHeaders", value: $0) }
         var messages: [EmailMessage] = []
         for id in ids {
             do {
-                messages.append(Self.message(try await get("messages/\(id)", [URLQueryItem(name: "format", value: "full")])))
+                messages.append(Self.message(try await get("messages/\(id)", metadata)))
             } catch Failure.http(404) {
                 continue
             }
@@ -99,7 +110,7 @@ final class GmailSource: MailSource {
             threadID: json["threadId"] as? String ?? "", messageID: json["id"] as? String ?? "",
             from: headers["from"] ?? "", subject: headers["subject"] ?? "",
             labels: json["labelIds"] as? [String] ?? [], hasListUnsubscribe: headers["list-unsubscribe"] != nil,
-            plainText: String(text(in: payload).prefix(textLimit)), receivedAt: received)
+            receivedAt: received)
     }
 
     /// The plain-text body, or the HTML one with its tags stripped. Attachments are skipped.

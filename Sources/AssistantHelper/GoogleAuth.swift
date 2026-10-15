@@ -47,7 +47,7 @@ final class GoogleAuth {
     }
 
     var isConnected: Bool {
-        ((try? refreshItem.read()) ?? nil) != nil && client != nil
+        ((try? refreshItem.read()) ?? nil)?.isEmpty == false && client != nil
     }
 
     var client: Client? {
@@ -61,7 +61,7 @@ final class GoogleAuth {
 
     /// Forgets the refresh token; Gmail stays unread until Dara connects again.
     func disconnect() {
-        try? refreshItem.write("")
+        refreshItem.delete()
         accessToken = nil
     }
 
@@ -69,11 +69,16 @@ final class GoogleAuth {
     func token() async throws -> String {
         if let accessToken, accessToken.expires > Date().addingTimeInterval(60) { return accessToken.value }
         guard let client, let refresh = (try? refreshItem.read()) ?? nil, !refresh.isEmpty else { throw Failure.notConnected }
-        let json = try await post([
-            "client_id": client.id, "client_secret": client.secret, "refresh_token": refresh,
-            "grant_type": "refresh_token",
-        ])
-        return try keep(json)
+        do {
+            return try keep(try await post([
+                "client_id": client.id, "client_secret": client.secret, "refresh_token": refresh,
+                "grant_type": "refresh_token",
+            ]))
+        } catch Failure.token(_, "invalid_grant") {
+            // The grant was revoked or expired: Dara needs to connect again.
+            disconnect()
+            throw Failure.notConnected
+        }
     }
 
     /// The browser sign-in. On success the refresh token is in the Keychain.
@@ -132,8 +137,6 @@ final class GoogleAuth {
         guard status == 200 else {
             let error = json["error"] as? String ?? "unknown"
             NSLog("TodoAgent: Google token \(status) \(error)")
-            // The grant was revoked or expired: Dara needs to connect again.
-            if error == "invalid_grant" { disconnect() }
             throw Failure.token(status, error)
         }
         return json
@@ -164,16 +167,19 @@ private final class LoopbackListener {
     func start() async throws -> UInt16 {
         try await withCheckedThrowingContinuation { continuation in
             var resumed = false
-            listener.stateUpdateHandler = { [listener] state in
+            listener.stateUpdateHandler = { [weak listener] state in
                 MainActor.assumeIsolated {
                     guard !resumed else { return }
                     switch state {
                     case .ready:
                         resumed = true
-                        continuation.resume(returning: listener.port?.rawValue ?? 0)
+                        continuation.resume(returning: listener?.port?.rawValue ?? 0)
                     case let .failed(error):
                         resumed = true
                         continuation.resume(throwing: error)
+                    case .cancelled:
+                        resumed = true
+                        continuation.resume(throwing: GoogleAuth.Failure.cancelled)
                     default: break
                     }
                 }
@@ -195,6 +201,8 @@ private final class LoopbackListener {
     }
 
     func stop() {
+        listener.stateUpdateHandler = nil
+        listener.newConnectionHandler = nil
         listener.cancel()
         finish(.failure(GoogleAuth.Failure.cancelled))
     }
