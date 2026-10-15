@@ -56,9 +56,16 @@ struct MatcherFitting {
         case let .app(bundleID):
             return window.app.bundleID == bundleID
         case let .site(prefix):
-            guard let page = page(of: window) else { return false }
-            return urlFits(prefix: withoutWWW(prefix.lowercased()), page: page)
+            return fits(site: prefix, window)
+        case .excluded:
+            return window.isExcluded
         }
+    }
+
+    /// Whether the window's page is on this site (a host, optionally with a path).
+    func fits(site: String, _ window: ActiveWindow) -> Bool {
+        guard let page = page(of: window) else { return false }
+        return urlFits(prefix: withoutWWW(site.lowercased()), page: page)
     }
 
     /// The Matcher "Always match" would add for this window: its URL down to two path segments

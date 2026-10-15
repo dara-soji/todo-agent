@@ -27,6 +27,7 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     case declareProject, editProject, archiveProject, restoreProject
     /// Dara marking an app or site as Neutral.
     case markNeutral
+    case addExclusion, removeExclusion
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail
@@ -54,18 +55,19 @@ public struct Guardrail {
     var rules: [GuardrailRule] = []
 
     public static func defaultTier(_ kind: OperationKind) -> Tier {
-        kind == .bulkEditTasks ? .ask : .auto
+        [.bulkEditTasks, .removeExclusion].contains(kind) ? .ask : .auto
     }
 
     /// Dara may tighten anything except changing tiers itself, what the helper does on its own, and
-    /// "Treat as Neutral", which applies straight away.
+    /// "Treat as Neutral" and "Exclude", which apply straight away.
     public static func canTighten(_ kind: OperationKind) -> Bool {
-        ![.changeGuardrail, .wakeTask, .markNeutral].contains(kind)
+        ![.changeGuardrail, .wakeTask, .markNeutral, .addExclusion].contains(kind)
     }
 
-    /// Only an Ask Operation can be loosened, and only to Auto.
+    /// Only an Ask Operation can be loosened, and only to Auto. Removing an exclusion always asks:
+    /// loosening it would let private data out with a single click.
     public static func canLoosen(_ kind: OperationKind) -> Bool {
-        defaultTier(kind) == .ask
+        defaultTier(kind) == .ask && kind != .removeExclusion
     }
 
     /// `projects` holds the Project of each Task or Project the Operation writes (nil for none);
@@ -95,15 +97,18 @@ public struct Change: Equatable, Sendable, Codable {
     public var guardrailRules: [GuardrailRule]?
     /// The whole new set of apps and sites Dara made Neutral, or nil if left alone.
     public var neutrals: [NeutralKey]?
+    /// The whole new exclude list, or nil if left alone.
+    public var exclusions: [Exclusion]?
 
     public init(
         tasks: [Task] = [], projects: [Project] = [], guardrailRules: [GuardrailRule]? = nil,
-        neutrals: [NeutralKey]? = nil
+        neutrals: [NeutralKey]? = nil, exclusions: [Exclusion]? = nil
     ) {
         self.tasks = tasks
         self.projects = projects
         self.guardrailRules = guardrailRules
         self.neutrals = neutrals
+        self.exclusions = exclusions
     }
 }
 
@@ -146,13 +151,15 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var log: [LogEntry]
     public var guardrailRules: [GuardrailRule]
     public var neutrals: [NeutralKey]
+    public var exclusions: [Exclusion]
     public var history: [NowBlock]
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], guardrailRules: [GuardrailRule] = [],
-        neutrals: [NeutralKey] = [], history: [NowBlock] = []
+        neutrals: [NeutralKey] = [], exclusions: [Exclusion] = [], history: [NowBlock] = []
     ) {
         self.history = history
+        self.exclusions = exclusions
         self.projects = projects
         self.tasks = tasks
         self.log = log
@@ -164,6 +171,7 @@ public struct StoreSnapshot: Equatable, Sendable {
     public mutating func apply(_ change: Change) {
         if let rules = change.guardrailRules { guardrailRules = rules }
         if let neutrals = change.neutrals { self.neutrals = neutrals }
+        if let exclusions = change.exclusions { self.exclusions = exclusions }
         for task in change.tasks {
             if let index = tasks.firstIndex(where: { $0.id == task.id }) { tasks[index] = task } else { tasks.append(task) }
         }

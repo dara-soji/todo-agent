@@ -7,6 +7,8 @@ public enum NeutralKey: Hashable, Sendable, Codable {
     case app(String)
     /// A site: a host, optionally with a path prefix, without the scheme.
     case site(String)
+    /// Any Excluded window: Excluded time counts as Neutral.
+    case excluded
 
     /// The short default list. Terminal is Neutral only outside a repo, because a repo-path Matcher
     /// fits first.
@@ -23,6 +25,7 @@ public enum NeutralKey: Hashable, Sendable, Codable {
         switch self {
         case let .app(bundleID): window?.app.bundleID == bundleID ? window?.app.name ?? bundleID : bundleID
         case let .site(site): site
+        case .excluded: "Excluded"
         }
     }
 }

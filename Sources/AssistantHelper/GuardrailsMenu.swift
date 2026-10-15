@@ -20,6 +20,7 @@ final class GuardrailsMenu: NSObject {
         .skipTask: "Skip Next", .keepTask: "Keep a skipped Task", .declareProject: "Declare a Project",
         .editProject: "Edit a Project", .archiveProject: "Archive a Project", .restoreProject: "Restore a Project",
         .undo: "Undo", .markNeutral: "Treat an app or site as Neutral",
+        .removeExclusion: "Stop excluding something",
     ]
 
     func item() -> NSMenuItem {

@@ -106,6 +106,8 @@ enum Shapes {
         case .noWindow: "There is no window to correct yet."
         case .noOffer: "Nothing is waiting for Always."
         case .alreadyNeutral: "That is already Neutral."
+        case .alreadyExcluded: "That is already Excluded."
+        case .notExcluded: "That isn't on the exclude list."
         case let .notUndoable(id): "Log entry \(id.rawValue.uuidString) ran nothing, so there is nothing to undo."
         }
     }

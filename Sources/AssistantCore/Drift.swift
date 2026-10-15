@@ -95,10 +95,12 @@ extension Assistant {
     /// An episode belongs to one Committed Task; no Committed Task, a different one, or Away starts
     /// afresh. Being on the Task's Project (or, for a Task with none, on No Project) ends the episode.
     private func trackDrift() {
-        guard let task = committedTask, !now.isAway, drift.task == task.id else {
+        // Away and Excluded time don't count.
+        let counts = !now.isAway && now.window?.isExcluded != true
+        guard let task = committedTask, counts, drift.task == task.id else {
             drift = DriftState(task: committedTask?.id, quietUntil: drift.quietUntil)
             nudge = nil
-            if committedTask != nil, !now.isAway { trackDrift() }
+            if committedTask != nil, counts { trackDrift() }
             return
         }
         if now.project == task.project {
@@ -116,7 +118,7 @@ extension Assistant {
 
     /// Away doesn't count toward the stretch, but doesn't undo "It's a quick one" either.
     private func trackNoProject() {
-        if now.isAway {
+        if now.isAway || now.window?.isExcluded == true {
             newTaskOffer.since = nil
         } else if now.window != nil, now.project == nil {
             newTaskOffer.since = newTaskOffer.since ?? clock.now

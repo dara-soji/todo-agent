@@ -374,6 +374,22 @@ import Testing
         #expect(log["entries"]?.arrayValue?.first?.objectValue?["kind"] == .string("addTask"))
     }
 
+    @Test func nothingAboutAnExcludedWindowReachesClaudeCode() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        try harness.assistant.exclude(.app("com.example.bank"))
+        harness.assistant.receive(.activeWindow(
+            app: App(bundleID: "com.example.bank", name: "My Bank"), windowTitle: "SECRET-TITLE",
+            url: URL(string: "https://secret.example/acct")))
+
+        let (_, text) = try await harness.callRaw("get_now", [:])
+
+        #expect(text.contains("\"app\":\"Excluded\""))
+        for secret in ["SECRET-TITLE", "secret.example", "My Bank", "com.example.bank"] {
+            #expect(!text.contains(secret), "\(secret) reached Claude Code")
+        }
+    }
+
     @Test func listTasksFiltersByStatusAndProject() async throws {
         let harness = try await Harness.start()
         defer { harness.stop() }

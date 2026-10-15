@@ -5,11 +5,14 @@ public struct ActiveWindow: Equatable, Sendable {
     public let app: App
     public let title: String?
     public let url: URL?
+    /// An Excluded window: nothing about it was kept. See `ActiveWindow.excluded`.
+    public let isExcluded: Bool
 
-    public init(app: App, title: String?, url: URL? = nil) {
+    public init(app: App, title: String?, url: URL? = nil, isExcluded: Bool = false) {
         self.app = app
         self.title = title
         self.url = url
+        self.isExcluded = isExcluded
     }
 }
 

@@ -15,7 +15,8 @@ public struct App: Hashable, Sendable {
 public enum Signal: Equatable, Sendable {
     /// The frontmost app, its focused window title, and the page URL when it is a browser.
     /// The title is nil when it can't be read (no Accessibility permission, or no focused window).
-    case activeWindow(app: App, windowTitle: String?, url: URL? = nil)
+    /// `sensitive` marks a private-browsing window or a password being typed: always Excluded.
+    case activeWindow(app: App, windowTitle: String?, url: URL? = nil, sensitive: Bool = false)
     /// Today's calendar events still to come or under way. Each report replaces the last.
     case calendar(events: [CalendarEvent])
     /// Seconds since Dara last used the keyboard or mouse. Reported every few seconds,

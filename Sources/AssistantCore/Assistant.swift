@@ -33,6 +33,9 @@ public final class Assistant {
         /// No "Always" is waiting.
         case noOffer
         case alreadyNeutral(NeutralKey)
+        case alreadyExcluded(Exclusion)
+        /// Not on the exclude list (always-Excluded windows never are).
+        case notExcluded(Exclusion)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -67,6 +70,8 @@ public final class Assistant {
     private var branches: [String: String] = [:]
     /// Apps and sites Dara made Neutral, on top of the defaults.
     public private(set) var neutrals: [NeutralKey]
+    /// Dara's exclude list, on top of the windows that are always Excluded.
+    public private(set) var exclusions: [Exclusion]
     /// Dara's "Not this" for one window; it lasts while that window does.
     var correction: (window: ActiveWindow, to: Correction)?
     /// The "Always …?" waiting after a correction.
@@ -105,12 +110,14 @@ public final class Assistant {
         self.operationLog = snapshot.log
         self.guardrail = Guardrail(rules: snapshot.guardrailRules)
         self.neutrals = snapshot.neutrals
+        self.exclusions = snapshot.exclusions
     }
 
     public func receive(_ signal: Signal) {
         switch signal {
-        case let .activeWindow(app, title, url):
-            let window = ActiveWindow(app: app, title: title, url: url)
+        case let .activeWindow(app, title, url, sensitive):
+            // Exclusions are applied here, as the Signal enters, before anything else sees it.
+            let window = sensitive ? .excluded : excluding(ActiveWindow(app: app, title: title, url: url))
             let since = window == now.window ? now.since ?? clock.now : clock.now
             resolve(Now.Visit(window: window, since: since))
         case let .calendar(events):
@@ -232,6 +239,7 @@ public final class Assistant {
             change.projects += operation.after.projects
             if let rules = operation.after.guardrailRules { change.guardrailRules = rules }
             if let neutrals = operation.after.neutrals { change.neutrals = neutrals }
+            if let exclusions = operation.after.exclusions { change.exclusions = exclusions }
         }
         guard committedCount(after: change) <= 1 else { throw Failure.secondCommittedTask }
         let entries = ask.operations.map {
@@ -328,6 +336,7 @@ public final class Assistant {
             }
             && (operation.before.guardrailRules.map { $0 == guardrail.rules } ?? true)
             && (operation.before.neutrals.map { $0 == neutrals } ?? true)
+            && (operation.before.exclusions.map { $0 == exclusions } ?? true)
     }
 
     /// Whether everything in `change` is still exactly as it says.
@@ -336,6 +345,7 @@ public final class Assistant {
             && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
             && (change.guardrailRules.map { $0 == guardrail.rules } ?? true)
             && (change.neutrals.map { $0 == neutrals } ?? true)
+            && (change.exclusions.map { $0 == exclusions } ?? true)
     }
 
     // MARK: Tiers
@@ -375,7 +385,8 @@ public final class Assistant {
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
             projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() },
             guardrailRules: change.guardrailRules.map { _ in guardrail.rules },
-            neutrals: change.neutrals.map { _ in neutrals })
+            neutrals: change.neutrals.map { _ in neutrals },
+            exclusions: change.exclusions.map { _ in exclusions })
     }
 
     /// How many Tasks in play would be committed once `change` is written.
@@ -395,6 +406,7 @@ public final class Assistant {
     private func apply(_ change: Change) {
         if let rules = change.guardrailRules { guardrail.rules = rules }
         if let neutrals = change.neutrals { self.neutrals = neutrals }
+        if let exclusions = change.exclusions { self.exclusions = exclusions }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }
@@ -405,6 +417,8 @@ public final class Assistant {
     /// correction for this window; a Matcher on the foreground window; a meeting under way; and,
     /// in a Neutral app or site, the last Project for up to `neutralHoldsFor` of Neutral.
     func resolve(_ visit: Now.Visit?) {
+        // Re-applied so a new exclusion scrubs the window already in front.
+        let visit = visit.map { Now.Visit(window: excluding($0.window), since: $0.since) }
         let window = visit?.window
         if window != now.window { confidentBeforeWindow = lastConfident }
         // A correction, and its offer, are for the window they were made on; any other window ends them.
@@ -468,9 +482,11 @@ public final class Assistant {
         neutralKey(for: window) != nil
     }
 
-    /// The Neutral app or site the window is in, from the defaults and Dara's own.
+    /// The Neutral app or site the window is in, from the defaults and Dara's own. Excluded time
+    /// counts as Neutral.
     private func neutralKey(for window: ActiveWindow) -> NeutralKey? {
-        (NeutralKey.defaults + neutrals).first { fitting.fits($0, window) }
+        if window.isExcluded { return .excluded }
+        return (NeutralKey.defaults + neutrals).first { fitting.fits($0, window) }
     }
 
     private func foregroundMatch(for window: ActiveWindow) -> Now.Match? {

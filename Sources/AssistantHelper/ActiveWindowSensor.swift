@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AssistantCore
+import Carbon.HIToolbox
 
 /// Reads the frontmost app (NSWorkspace, no permission) and its focused window title
 /// (Accessibility) and reports each change as an activeWindow Signal.
@@ -8,6 +9,8 @@ import AssistantCore
 final class ActiveWindowSensor: SignalSource {
     private var deliver: ((Signal) -> Void)?
     private let browser = BrowserURLReader()
+    /// Apps to read nothing from, not even a title. Set before start.
+    var excludesApp: (String) -> Bool = { _ in false }
     /// Bumped on every report, so a slow URL read can't overwrite a newer window.
     private var reportNumber = 0
     private var activationToken: NSObjectProtocol?
@@ -65,6 +68,14 @@ final class ActiveWindowSensor: SignalSource {
         let app = App(
             bundleID: frontmost.bundleIdentifier ?? "pid.\(frontmost.processIdentifier)",
             name: frontmost.localizedName ?? "Unknown")
+        // An Excluded app: nothing about its windows is read at all.
+        if excludesApp(app.bundleID) {
+            return deliver(.activeWindow(app: app, windowTitle: nil, sensitive: true))
+        }
+        // Secure input is on while a password is being typed, anywhere: read nothing.
+        if IsSecureEventInputEnabled() {
+            return deliver(.activeWindow(app: app, windowTitle: nil, sensitive: true))
+        }
         let title = focusedWindowTitle()
         guard browser.reads(app.bundleID) else {
             return deliver(.activeWindow(app: app, windowTitle: title))
@@ -72,9 +83,13 @@ final class ActiveWindowSensor: SignalSource {
         // Re-read on every report: switching tabs changes the window title, which triggers one.
         reportNumber += 1
         let number = reportNumber
-        browser.url(ofFrontTabIn: app.bundleID) { [weak self] url in
+        browser.frontTab(in: app.bundleID) { [weak self] tab in
             guard let self, number == reportNumber else { return }
-            deliver(.activeWindow(app: app, windowTitle: title, url: url))
+            switch tab {
+            case let .page(url): deliver(.activeWindow(app: app, windowTitle: title, url: url))
+            case .privateWindow: deliver(.activeWindow(app: app, windowTitle: nil, sensitive: true))
+            case .unknown: deliver(.activeWindow(app: app, windowTitle: title))
+            }
         }
     }
 
