@@ -108,9 +108,16 @@ extension Assistant {
 
     /// The one Task to do after Now, chosen by rule. Suggestions never feed it.
     public var next: Next {
-        let open = tasks.filter { $0.status == .open }
-        return NextRule(now: clock.now, calendar: calendar, currentProject: now.confidentProject, events: calendarEvents)
-            .choose(from: open)
+        let ruled = nextRule().choose(from: tasks.filter { $0.status == .open })
+        // Among Tasks the rule scored the same, Sonnet's pick and reason, once it has answered.
+        if let pick = tieBreakPick(), let task = task(pick.task) {
+            return .task(pick.task, reason: .chosen(pick.reason), wontFitBefore: nextRule().wontFitBefore(task))
+        }
+        return ruled
+    }
+
+    func nextRule() -> NextRule {
+        NextRule(now: clock.now, calendar: calendar, currentProject: now.confidentProject, events: calendarEvents)
     }
 
     /// Accepts Next: it becomes the Committed Task.

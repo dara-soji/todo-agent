@@ -16,6 +16,8 @@ public enum Next: Equatable, Sendable {
         case deepInTheMorning
         case shallowInTheAfternoon
         case oldest
+        /// Sonnet's one-line reason, for a pick among Tasks the rule scored the same.
+        case chosen(String)
     }
 
     public var task: Task.ID? {
@@ -58,25 +60,60 @@ struct NextRule {
     let currentProject: Project.ID?
     let events: [CalendarEvent]
 
-    func choose(from open: [Task]) -> Next {
+    /// What both `choose` and `tie` work from, so they never disagree.
+    private struct Pool {
+        let candidates: [Task]
+        let block: (start: Date, end: Date?)
+        /// The Tasks the pick is made among: those that fit the free block, or all of them when none
+        /// fits or the best is due within a day.
+        let tasks: [Task]
+        let resume: Task?
+    }
+
+    private func pool(from open: [Task]) -> Pool? {
         // A skipped Task sits out its two hours, unless nothing else is open.
         let notSkipped = open.filter { ($0.skippedUntil ?? .distantPast) <= now }
         let candidates = notSkipped.isEmpty ? open : notSkipped
-        guard !candidates.isEmpty else { return .planTomorrow }
-        if let resume = candidates.filter(\.resumeAfterInterruption).min(by: { $0.created < $1.created }) {
-            return .task(resume.id, reason: .resume, wontFitBefore: nil)
-        }
-
+        guard let best = candidates.min(by: ranksAbove) else { return nil }
+        let resume = candidates.filter(\.resumeAfterInterruption).min { $0.created < $1.created }
         let block = freeBlock()
-        let best = candidates.min(by: ranksAbove)!
-        if urgency(best) == Self.dueWithinADay {
-            return .task(best.id, reason: reason(for: best), wontFitBefore: fits(best, block) ? nil : block.end)
-        }
         let fitting = candidates.filter { fits($0, block) }
-        let pool = fitting.isEmpty ? candidates : fitting
-        let chosen = pool.min(by: ranksAbove)!
-        return .task(chosen.id, reason: reason(for: chosen), wontFitBefore: fitting.isEmpty ? block.end : nil)
+        let tasks = urgency(best) == Self.dueWithinADay || fitting.isEmpty ? candidates : fitting
+        return Pool(candidates: candidates, block: block, tasks: tasks, resume: resume)
     }
+
+    func choose(from open: [Task]) -> Next {
+        guard let pool = pool(from: open) else { return .planTomorrow }
+        if let resume = pool.resume { return .task(resume.id, reason: .resume, wontFitBefore: nil) }
+        let chosen = pool.tasks.min(by: ranksAbove)!
+        return .task(chosen.id, reason: reason(for: chosen), wontFitBefore: wontFit(chosen, pool.block))
+    }
+
+    /// The Tasks tied at the top (the rule scores them the same, age aside), at most `limit`, when
+    /// there are at least two. Never for an interrupted Task coming back.
+    func tie(from open: [Task], limit: Int) -> [Task]? {
+        guard let pool = pool(from: open), pool.resume == nil else { return nil }
+        let ranked = pool.tasks.sorted(by: ranksAbove)
+        let top = ranked.filter { scoresSame($0, ranked[0]) }
+        return top.count >= 2 ? Array(top.prefix(limit)) : nil
+    }
+
+    /// When this Task won't be finished before the next meeting: that meeting's start, or nil if it fits.
+    func wontFitBefore(_ task: Task) -> Date? {
+        wontFit(task, freeBlock())
+    }
+
+    private func wontFit(_ task: Task, _ block: (start: Date, end: Date?)) -> Date? {
+        fits(task, block) ? nil : block.end
+    }
+
+    private func scoresSame(_ a: Task, _ b: Task) -> Bool {
+        urgency(a) == urgency(b) && (urgency(a) == 0 || a.deadline == b.deadline)
+            && continues(a) == continues(b) && suitsTimeOfDay(a) == suitsTimeOfDay(b)
+    }
+
+    /// "morning" or "afternoon", the part of the day the score is for.
+    var partOfDay: String { isMorning ? "morning" : "afternoon" }
 
     // MARK: Free block
 
