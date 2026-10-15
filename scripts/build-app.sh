@@ -28,6 +28,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSUIElement</key><true/>
     <key>NSAppleEventsUsageDescription</key><string>Reads the front tab's URL so web work can match your Projects.</string>
+    <key>NSScreenCaptureUsageDescription</key><string>Takes one screenshot of a window it can't place, to guess its Project. Never stored.</string>
     <key>NSCalendarsFullAccessUsageDescription</key><string>Reads today's events so meetings can match your Projects.</string>
 </dict>
 </plist>

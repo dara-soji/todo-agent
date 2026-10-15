@@ -50,6 +50,7 @@ enum Shapes {
         case .meeting: "meeting"
         case .neutralHold: "neutral_hold"
         case .correction: "correction"
+        case .guess: "guess"
         }
     }
 

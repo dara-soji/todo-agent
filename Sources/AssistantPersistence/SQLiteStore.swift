@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 6
+    static let schemaVersion = 7
 
     public let url: URL
     private var db: OpaquePointer?
@@ -103,6 +103,17 @@ public final class SQLiteStore {
                         project_id TEXT NOT NULL, task_id TEXT, start REAL NOT NULL, end REAL NOT NULL
                     );
                     CREATE INDEX now_history_start ON now_history (start);
+                    """)
+            }
+            if stored < 7 {
+                // Metadata only: what was sent, by what, and its cost; never the content.
+                try run("""
+                    CREATE TABLE api_audit (
+                        at REAL NOT NULL, purpose TEXT NOT NULL, model TEXT NOT NULL,
+                        input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+                        content_kind TEXT NOT NULL, cost_usd REAL NOT NULL
+                    );
+                    CREATE INDEX api_audit_at ON api_audit (at);
                     """)
             }
             try execute("""
@@ -201,6 +212,19 @@ extension SQLiteStore: AssistantStore {
                     project: Project.ID(project), committedTask: UUID(uuidString: row[1]).map(Task.ID.init),
                     start: Date(timeIntervalSinceReferenceDate: start), end: Date(timeIntervalSinceReferenceDate: end))
             }
+    }
+
+    public func audit(_ call: APICall) throws {
+        try execute("""
+            INSERT INTO api_audit (at, purpose, model, input_tokens, output_tokens, content_kind, cost_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """, String(call.at.timeIntervalSinceReferenceDate), call.purpose.rawValue, call.model,
+            String(call.inputTokens), String(call.outputTokens), call.contentKind.rawValue, String(call.costUSD))
+    }
+
+    public func apiSpend(since: Date) throws -> Double {
+        try rows("SELECT COALESCE(SUM(cost_usd), 0) FROM api_audit WHERE at >= \(since.timeIntervalSinceReferenceDate);",
+                 columns: 1).first.flatMap { Double($0[0]) } ?? 0
     }
 
     public func record(_ block: NowBlock) throws {

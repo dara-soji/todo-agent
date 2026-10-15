@@ -33,6 +33,23 @@ final class TasksMenu: NSObject {
             case let .offer(.alwaysMatch(matcher, project)):
                 let name = assistant.project(project)?.shortName.uppercased() ?? "it"
                 return offerItem("Always match \(MatcherText.format(matcher)) to \(name)?")
+            case let .isThis(project):
+                let name = assistant.project(project)?.name ?? "this Project"
+                let item = NSMenuItem(title: "Is this \(name)?", action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                let yes = NSMenuItem(title: "Yes", action: #selector(confirmGuess), keyEquivalent: "")
+                yes.target = self
+                item.submenu?.addItem(yes)
+                let no = NSMenuItem(title: "No, it's…", action: nil, keyEquivalent: "")
+                no.submenu = NSMenu()
+                for other in assistant.projects where other.status == .active && other.id != project {
+                    no.submenu?.addItem(correctionItem(other.name, .project(other.id)))
+                }
+                no.submenu?.addItem(.separator())
+                no.submenu?.addItem(correctionItem("Neutral", .neutral))
+                no.submenu?.addItem(correctionItem("None", .none))
+                item.submenu?.addItem(no)
+                return item
             case let .newTask(title):
                 let item = NSMenuItem(title: "New task: \(title)?", action: nil, keyEquivalent: "")
                 item.submenu = NSMenu()
@@ -105,6 +122,27 @@ final class TasksMenu: NSObject {
             item.submenu?.addItem(choice)
         }
         return item
+    }
+
+    private final class CorrectionBox: NSObject {
+        let correction: Correction
+        init(_ correction: Correction) { self.correction = correction }
+    }
+
+    private func correctionItem(_ title: String, _ correction: Correction) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(correct(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = CorrectionBox(correction)
+        return item
+    }
+
+    @objc private func correct(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? CorrectionBox else { return }
+        Attempt.run("Couldn't correct Now", then: onChange) { try assistant.correctNow(box.correction) }
+    }
+
+    @objc private func confirmGuess() {
+        Attempt.run("Couldn't confirm it", then: onChange) { try assistant.confirmGuess() }
     }
 
     @objc private func addNewTask() {

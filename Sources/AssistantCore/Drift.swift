@@ -95,8 +95,8 @@ extension Assistant {
     /// An episode belongs to one Committed Task; no Committed Task, a different one, or Away starts
     /// afresh. Being on the Task's Project (or, for a Task with none, on No Project) ends the episode.
     private func trackDrift() {
-        // Away and Excluded time don't count.
-        let counts = !now.isAway && now.window?.isExcluded != true
+        // Away, Excluded and guessed time don't count.
+        let counts = !now.isAway && now.window?.isExcluded != true && now.match?.isGuess != true
         guard let task = committedTask, counts, drift.task == task.id else {
             drift = DriftState(task: committedTask?.id, quietUntil: drift.quietUntil)
             nudge = nil
@@ -136,7 +136,8 @@ extension Assistant {
     }
 
     private func trackHistory() {
-        let key = now.project.map { (project: $0, task: committedTask?.id) }
+        // Only confident time goes into Now history; a guess is not.
+        let key = now.confidentProject.map { (project: $0, task: committedTask?.id) }
         if let open = openHistoryBlock, let key, open.project == key.project, open.task == key.task { return }
         // Going Away, the block ended when input stopped, not when Away was noticed.
         closeHistoryBlock(at: now.isAway ? clock.now - idleSeconds : clock.now)

@@ -44,9 +44,9 @@ public final class Assistant {
     static let awayAfter: TimeInterval = 5 * 60
 
     let clock: WallClock
+    let store: AssistantStore
     /// For time of day and dates as Dara reads them.
     let calendar: Calendar
-    private let store: AssistantStore
     /// Dara's tier rules, Neutrals and exclude list.
     public private(set) var settings: Settings
     private var guardrail: Guardrail { Guardrail(rules: settings.guardrailRules) }
@@ -97,6 +97,17 @@ public final class Assistant {
     var openHistoryBlock: OpenBlock?
     /// Seconds since the last input, from the latest idle Signal.
     var idleSeconds: TimeInterval = 0
+    /// Haiku's answers per window: a Project, or nil for none. Kept in memory only.
+    var guessCache: [GuessKey: Project.ID?] = [:]
+    var guessInFlight: (key: GuessKey, since: Date)?
+    /// Guess keys, oldest first, to keep the cache bounded.
+    var guessOrder: [GuessKey] = []
+    /// When a window whose guess failed may be tried again.
+    var guessRetryAt: [GuessKey: Date] = [:]
+    /// The unplaced window being timed for a guess.
+    var guessWatch: (key: GuessKey, since: Date)?
+    /// Today's API spend, read from the audit log once a day and added to as calls are made.
+    var apiSpend: (day: Date, today: Double) = (.distantPast, 0)
 
     /// How long a Neutral app or site keeps Now on the last Project.
     static let neutralHoldsFor: TimeInterval = 15 * 60
@@ -333,6 +344,7 @@ public final class Assistant {
     private func write(_ change: Change, entries: [LogEntry]) throws {
         try store.write(change, log: entries)
         apply(change)
+        if !change.projects.isEmpty { forgetStaleGuesses() }
         operationLog += entries
         resolve(now.visit)
     }
@@ -463,9 +475,15 @@ public final class Assistant {
             neutralSince = nil
         }
 
-        if let match { lastMatched[match.project] = clock.now }
-        lastConfident = match?.project
+        // Nothing else places the window: show Haiku's cached guess for it, if any.
+        let placed = match != nil || neutral != nil || corrected != nil || isAway
+        if !placed, let window { match = guessMatch(for: window) }
+
+        if let match, !match.isGuess { lastMatched[match.project] = clock.now }
+        // A guess is never confident, so it is never what a Neutral window holds.
+        lastConfident = match?.isGuess == true ? nil : match?.project
         now = Now(visit: visit, match: match, isAway: isAway, neutral: neutral)
+        trackGuessWatch(placed: placed)
         trackAfterResolve()
     }
 

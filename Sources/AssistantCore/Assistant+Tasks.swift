@@ -26,7 +26,7 @@ extension Assistant {
     /// and the Task it interrupts is marked to resume.
     @discardableResult
     public func quickAdd(_ title: String, start: Bool = false, by startedBy: StartedBy = .dara) throws -> Task {
-        let task = try newTask(TaskDraft(title: title, project: now.project))
+        let task = try newTask(TaskDraft(title: title, project: now.confidentProject))
         guard start else {
             try perform(.addTask, "Added “\(task.title)”", by: startedBy, writing: Change(tasks: [task]))
             return task
@@ -109,7 +109,7 @@ extension Assistant {
     /// The one Task to do after Now, chosen by rule. Suggestions never feed it.
     public var next: Next {
         let open = tasks.filter { $0.status == .open }
-        return NextRule(now: clock.now, calendar: calendar, currentProject: now.project, events: calendarEvents)
+        return NextRule(now: clock.now, calendar: calendar, currentProject: now.confidentProject, events: calendarEvents)
             .choose(from: open)
     }
 
@@ -145,7 +145,7 @@ extension Assistant {
 
     /// Choices waiting for Dara in the menu: Asks to confirm first, then Tasks skipped three times.
     public var decisions: [Decision] {
-        asks.filter { $0.expires > clock.now }.map { .confirm($0.id) } + offerDecision + (newTaskTitle.map { [.newTask($0)] } ?? []) + tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
+        asks.filter { $0.expires > clock.now }.map { .confirm($0.id) } + offerDecision + guessDecision + (newTaskTitle.map { [.newTask($0)] } ?? []) + tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
     }
 
     /// Moves the Task to the Deleted list, where it can be restored. A committed Task stops being committed.
@@ -249,5 +249,12 @@ extension Task {
         task.deletedAt = time
         if task.status == .committed { task.status = .open }
         return task
+    }
+}
+
+extension Assistant {
+    var guessDecision: [Decision] {
+        guard let match = now.match, match.isGuess else { return [] }
+        return [.isThis(match.project)]
     }
 }
