@@ -67,7 +67,7 @@ extension Assistant {
     }
 
     /// The bare, lowercased address in "Name <address>" or "address".
-    private static func address(in sender: String) -> String {
+    static func address(in sender: String) -> String {
         let lowered = sender.lowercased()
         if let open = lowered.lastIndex(of: "<"), let close = lowered.lastIndex(of: ">"), open < close {
             return String(lowered[lowered.index(after: open)..<close]).trimmingCharacters(in: .whitespaces)

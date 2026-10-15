@@ -14,6 +14,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let guardrailsMenu: GuardrailsMenu
     private let nowMenu: NowMenu
     private let exclusionsMenu: ExclusionsMenu
+    private let suggestionsMenu: SuggestionsMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
@@ -24,8 +25,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
     init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, guardrailsMenu: GuardrailsMenu,
-         nowMenu: NowMenu, exclusionsMenu: ExclusionsMenu, storeProblem: String?) {
+         nowMenu: NowMenu, exclusionsMenu: ExclusionsMenu, suggestionsMenu: SuggestionsMenu, storeProblem: String?) {
         self.menuBar = menuBar
+        self.suggestionsMenu = suggestionsMenu
         self.nowMenu = nowMenu
         self.exclusionsMenu = exclusionsMenu
         self.projectsMenu = projectsMenu
@@ -93,6 +95,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(nextTitle(menuBar.nextTitle))
         if let reason = menuBar.nextReason { menu.addItem(metadata(reason)) }
         tasksMenu.nextItems().forEach(menu.addItem)
+        if let suggestions = suggestionsMenu.item() { menu.addItem(suggestions) }
 
         menu.addItem(.separator())
         let addTask = action("Add task…", #selector(addTask))
@@ -131,6 +134,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         menu.addItem(action(ClaudeAPIKey.load() == nil ? "Set Claude API key…" : "Replace Claude API key…",
                             #selector(setAPIKey)))
+        if storeProblem == nil { menu.addItem(suggestionsMenu.connectionItem()) }
         menu.addItem(metadata(String(format: "Claude API today: $%.4f", currentSpend())))
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -180,7 +184,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     @objc private func setAPIKey() {
         let alert = NSAlert()
         alert.messageText = "Claude API key"
-        alert.informativeText = "Used for the occasional screenshot guess and, later, Next and email Triage. Kept in your Keychain."
+        alert.informativeText = "Used for the occasional screenshot guess, breaking ties for Next, and email Triage. Kept in your Keychain."
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))

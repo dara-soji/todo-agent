@@ -21,6 +21,7 @@ final class GuardrailsMenu: NSObject {
         .editProject: "Edit a Project", .archiveProject: "Archive a Project", .restoreProject: "Restore a Project",
         .undo: "Undo", .markNeutral: "Treat an app or site as Neutral",
         .removeExclusion: "Stop excluding something",
+        .acceptSuggestion: "Accept a Suggestion", .dismissSuggestion: "Dismiss a Suggestion",
     ]
 
     func item() -> NSMenuItem {

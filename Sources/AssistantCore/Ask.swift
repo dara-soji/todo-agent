@@ -22,7 +22,7 @@ public struct Ask: Identifiable, Equatable, Sendable {
 
         /// The Task and Project ids it writes.
         var touches: Set<UUID> {
-            Set(after.tasks.map(\.id.rawValue) + after.projects.map(\.id.rawValue))
+            Set(after.tasks.map(\.id.rawValue) + after.projects.map(\.id.rawValue) + after.suggestions.map(\.id.rawValue))
         }
     }
 

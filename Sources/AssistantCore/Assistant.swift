@@ -38,6 +38,8 @@ public final class Assistant {
         case notExcluded(Exclusion)
         /// An Excluded window can't be corrected: nothing about it is known.
         case windowExcluded
+        /// No open Suggestion has that id.
+        case unknownSuggestion(Suggestion.ID)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -110,6 +112,10 @@ public final class Assistant {
     var tieRetryAt: [TieKey: Date] = [:]
     /// The unplaced window being timed for a guess.
     var guessWatch: (key: GuessKey, since: Date)?
+    /// Every Suggestion by thread, answered or not: a thread gets one Suggestion, ever.
+    private(set) var suggestionsByThread: [String: Suggestion]
+    /// Where Triage has read the mailbox up to; nil before the first run.
+    public private(set) var mailCursor: String?
     /// Today's API spend, read from the audit log once a day and added to as calls are made.
     var apiSpend: (day: Date, today: Double) = (.distantPast, 0)
 
@@ -128,6 +134,8 @@ public final class Assistant {
         self.tasksByID = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         self.operationLog = snapshot.log
         self.settings = snapshot.settings
+        self.suggestionsByThread = Dictionary(snapshot.suggestions.map { ($0.threadID, $0) }, uniquingKeysWith: { _, last in last })
+        self.mailCursor = snapshot.mailCursor
     }
 
     public func receive(_ signal: Signal) {
@@ -152,6 +160,7 @@ public final class Assistant {
         }
         wakeSnoozedTasks()
         expireDueAsks()
+        expireSuggestions()
     }
 
     /// The checked-out branch of the repo a repo-path Matcher names, if it is watched.
@@ -266,6 +275,7 @@ public final class Assistant {
         for operation in ask.operations {
             change.tasks += operation.after.tasks
             change.projects += operation.after.projects
+            change.suggestions += operation.after.suggestions
             if let settings = operation.after.settings { change.settings = settings }
         }
         guard committedCount(after: change) <= 1 else { throw Failure.secondCommittedTask }
@@ -344,6 +354,11 @@ public final class Assistant {
             undoes: operation.undoes)
     }
 
+    /// Stores what isn't an Operation (Triage's Suggestions and cursor, quiet expiry): no log entry.
+    func writeUnlogged(_ change: Change) throws {
+        try write(change, entries: [])
+    }
+
     /// Stores the change and its log entries, then applies them. A failed store write changes nothing.
     private func write(_ change: Change, entries: [LogEntry]) throws {
         try store.write(change, log: entries)
@@ -362,6 +377,7 @@ public final class Assistant {
             && operation.before.projects.allSatisfy { project in
                 operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
             }
+            && operation.before.suggestions.allSatisfy { suggestionsByThread[$0.threadID] == $0 }
             && (operation.before.settings.map { $0 == settings } ?? true)
     }
 
@@ -369,6 +385,7 @@ public final class Assistant {
     private func isCurrent(_ change: Change) -> Bool {
         change.tasks.allSatisfy { tasksByID[$0.id] == $0 }
             && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
+            && change.suggestions.allSatisfy { suggestionsByThread[$0.threadID] == $0 }
             && (change.settings.map { $0 == settings } ?? true)
     }
 
@@ -409,7 +426,11 @@ public final class Assistant {
         Change(
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
             projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() },
-            settings: change.settings.map { _ in settings })
+            settings: change.settings.map { _ in settings },
+            // A Suggestion new to the store would be undone into a dismissed one.
+            suggestions: change.suggestions.map { suggestion in
+                suggestionsByThread[suggestion.threadID] ?? { var undone = suggestion; undone.status = .dismissed; return undone }()
+            })
     }
 
     /// How many Tasks in play would be committed once `change` is written.
@@ -428,6 +449,8 @@ public final class Assistant {
 
     private func apply(_ change: Change) {
         if let settings = change.settings { self.settings = settings }
+        if let cursor = change.mailCursor { mailCursor = cursor }
+        for suggestion in change.suggestions { suggestionsByThread[suggestion.threadID] = suggestion }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }

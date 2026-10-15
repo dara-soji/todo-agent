@@ -26,7 +26,7 @@ public struct GuessRequest: Equatable, Sendable {
 /// One call to the Claude API, as the audit log keeps it: metadata only, never content.
 public struct APICall: Equatable, Sendable, Codable {
     public enum Purpose: String, Sendable, Codable {
-        case projectGuess, nextTieBreak
+        case projectGuess, nextTieBreak, triage
     }
 
     /// What kind of content was sent, never the content itself.
@@ -34,6 +34,8 @@ public struct APICall: Equatable, Sendable, Codable {
         case screenshotAndProjectNames
         /// Task titles with their deadlines, effort and kind.
         case taskDetails
+        /// One email's sender, subject and the start of its plain text.
+        case emailExcerpt
     }
 
     public let at: Date
