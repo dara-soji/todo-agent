@@ -5,7 +5,9 @@ public enum Next: Equatable, Sendable {
     /// `wontFitBefore` is set when no open Task fits the next free calendar block, so this is
     /// the best one anyway, and it won't be finished before that time.
     case task(Task.ID, reason: Reason, wontFitBefore: Date?)
-    /// Nothing is open. Once Suggestions exist (ticket 13), "Review Suggestions (n)" comes before this.
+    /// Nothing is open, but Suggestions are waiting: review them. Suggestions never become Next themselves.
+    case reviewSuggestions(Int)
+    /// Nothing is open and no Suggestion is waiting.
     case planTomorrow
 
     /// The deciding factor, as shown under Next.

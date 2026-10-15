@@ -70,7 +70,7 @@ enum ToolCatalog {
         Spec(name: "get_next", description: "The one Task the assistant recommends after Now, with its one-line reason.",
              input: object([:]),
              output: output(["task": nullableObject, "reason": nullableString, "wont_fit_before": nullableString,
-                             "plan_tomorrow": boolean]),
+                             "plan_tomorrow": boolean, "review_suggestions": ["type": ["integer", "null"]]]),
              kind: .read) { assistant, _ in
             let next = assistant.next
             return [
@@ -78,6 +78,7 @@ enum ToolCatalog {
                 "reason": assistant.menuBar.nextReason.map(Value.string) ?? .null,
                 "wont_fit_before": next.wontFitBefore.map(Shapes.date) ?? .null,
                 "plan_tomorrow": .bool(next == .planTomorrow),
+                "review_suggestions": { if case let .reviewSuggestions(count) = next { .int(count) } else { .null } }(),
             ]
         },
         Spec(name: "list_tasks", description: "Tasks, oldest first. Filter by status or Project; deleted Tasks only on request.",

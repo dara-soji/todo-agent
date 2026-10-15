@@ -28,6 +28,8 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     /// Dara marking an app or site as Neutral.
     case markNeutral
     case addExclusion, removeExclusion
+    /// Dara answering a Suggestion: accepting makes it a Task; dismissing drops it.
+    case acceptSuggestion, dismissSuggestion
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail
@@ -102,18 +104,37 @@ public struct Settings: Equatable, Sendable, Codable {
     }
 }
 
-/// The Tasks and Projects an Operation writes, each in its new state, and Dara's settings if it
-/// changes them.
+/// The Tasks, Projects and Suggestions an Operation writes, each in its new state, and Dara's
+/// settings if it changes them. Triage also writes Suggestions and the mail cursor this way, unlogged.
 public struct Change: Equatable, Sendable, Codable {
     public var tasks: [Task]
     public var projects: [Project]
     /// The whole new settings, or nil if the Operation leaves them alone.
     public var settings: Settings?
+    public var suggestions: [Suggestion]
+    /// Where Triage has read the mailbox up to, or nil to leave it alone.
+    public var mailCursor: String?
 
-    public init(tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil) {
+    public init(
+        tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil, suggestions: [Suggestion] = [],
+        mailCursor: String? = nil
+    ) {
         self.tasks = tasks
         self.projects = projects
         self.settings = settings
+        self.suggestions = suggestions
+        self.mailCursor = mailCursor
+    }
+
+    /// Log entries stored before Suggestions existed still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            tasks: try c.decode([Task].self, forKey: .tasks),
+            projects: try c.decode([Project].self, forKey: .projects),
+            settings: try c.decodeIfPresent(Settings.self, forKey: .settings),
+            suggestions: try c.decodeIfPresent([Suggestion].self, forKey: .suggestions) ?? [],
+            mailCursor: try c.decodeIfPresent(String.self, forKey: .mailCursor))
     }
 }
 
@@ -161,11 +182,16 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var settings: Settings
     public var history: [NowBlock]
     public var audit: [APICall]
+    /// Every Suggestion, answered or not, so a thread is never suggested twice.
+    public var suggestions: [Suggestion]
+    public var mailCursor: String?
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
-        history: [NowBlock] = [], audit: [APICall] = []
+        history: [NowBlock] = [], audit: [APICall] = [], suggestions: [Suggestion] = [], mailCursor: String? = nil
     ) {
+        self.suggestions = suggestions
+        self.mailCursor = mailCursor
         self.history = history
         self.audit = audit
         self.settings = settings
@@ -174,9 +200,18 @@ public struct StoreSnapshot: Equatable, Sendable {
         self.log = log
     }
 
-    /// Writes each changed Task and Project over its old version, and any new settings.
+    /// Writes each changed Task, Project and Suggestion over its old version, and any new settings
+    /// and cursor.
     public mutating func apply(_ change: Change) {
         if let settings = change.settings { self.settings = settings }
+        if let cursor = change.mailCursor { mailCursor = cursor }
+        for suggestion in change.suggestions {
+            if let index = suggestions.firstIndex(where: { $0.threadID == suggestion.threadID }) {
+                suggestions[index] = suggestion
+            } else {
+                suggestions.append(suggestion)
+            }
+        }
         for task in change.tasks {
             if let index = tasks.firstIndex(where: { $0.id == task.id }) { tasks[index] = task } else { tasks.append(task) }
         }

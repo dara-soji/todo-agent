@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 7
+    static let schemaVersion = 8
 
     public let url: URL
     private var db: OpaquePointer?
@@ -116,6 +116,10 @@ public final class SQLiteStore {
                     CREATE INDEX api_audit_at ON api_audit (at);
                     """)
             }
+            if stored < 8 {
+                // One Suggestion per email thread, ever, stored whole. Never an email body.
+                try run("CREATE TABLE suggestions (thread_id TEXT PRIMARY KEY, json TEXT NOT NULL);")
+            }
             try execute("""
                 INSERT INTO meta (key, value) VALUES ('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
@@ -195,7 +199,9 @@ extension SQLiteStore: AssistantStore {
             tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
             settings: Settings(
-                guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions()))
+                guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions()),
+            suggestions: readable(Suggestion.self, try rows("SELECT thread_id, json FROM suggestions;", columns: 2)),
+            mailCursor: try readSetting(Self.mailCursorKey))
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -233,6 +239,8 @@ extension SQLiteStore: AssistantStore {
                     String(block.start.timeIntervalSinceReferenceDate), String(block.end.timeIntervalSinceReferenceDate))
     }
 
+    /// Gmail's history id, stored as the plain string.
+    private static let mailCursorKey = "mail_cursor"
     private static let neutralsKey = "neutrals"
     private static let exclusionsKey = "exclusions"
 
@@ -286,6 +294,13 @@ extension SQLiteStore: AssistantStore {
                     ON CONFLICT(id) DO UPDATE SET json = excluded.json;
                     """, task.id.rawValue.uuidString, try encode(task))
             }
+            for suggestion in change.suggestions {
+                try execute("""
+                    INSERT INTO suggestions (thread_id, json) VALUES (?, ?)
+                    ON CONFLICT(thread_id) DO UPDATE SET json = excluded.json;
+                    """, suggestion.threadID, try encode(suggestion))
+            }
+            if let cursor = change.mailCursor { try writeSetting(Self.mailCursorKey, cursor) }
             for entry in entries {
                 try execute("INSERT INTO operation_log (id, at, json) VALUES (?, ?, ?);",
                             entry.id.rawValue.uuidString, String(entry.at.timeIntervalSinceReferenceDate), try encode(entry))

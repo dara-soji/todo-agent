@@ -107,6 +107,11 @@ struct NextLine {
     let reason: String?
 
     init(_ next: Next, task: Task?, project: (Project.ID) -> Project?, now: Date, calendar: Calendar) {
+        if case let .reviewSuggestions(count) = next {
+            title = "Review Suggestions (\(count))"
+            reason = nil
+            return
+        }
         guard case let .task(_, reason, wontFitBefore) = next, let task else {
             title = "Plan tomorrow"
             reason = nil

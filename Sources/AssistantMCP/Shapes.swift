@@ -111,6 +111,7 @@ enum Shapes {
         case .notExcluded: "That isn't on the exclude list."
         case .windowExcluded: "The window in front is Excluded, so it can't be corrected."
         case let .notUndoable(id): "Log entry \(id.rawValue.uuidString) ran nothing, so there is nothing to undo."
+        case let .unknownSuggestion(id): "No open Suggestion \(id.rawValue.uuidString)."
         }
     }
 }
