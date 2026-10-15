@@ -26,12 +26,12 @@ public struct GuessRequest: Equatable, Sendable {
 /// One call to the Claude API, as the audit log keeps it: metadata only, never content.
 public struct APICall: Equatable, Sendable, Codable {
     public enum Purpose: String, Sendable, Codable {
-        case projectGuess
+        case projectGuess, nextTieBreak
     }
 
     /// What kind of content was sent, never the content itself.
     public enum ContentKind: String, Sendable, Codable {
-        case screenshotAndProjectNames
+        case screenshotAndProjectNames, taskTitles
     }
 
     public let at: Date
@@ -60,6 +60,15 @@ public struct APICall: Equatable, Sendable, Codable {
         "claude-haiku-5-5": (0.10, 0.50),
         "claude-sonnet-5-5": (2.00, 10.00),
     ]
+}
+
+/// Names made distinct for a model to choose among: repeats are numbered "Name (2)", "Name (3)".
+func uniqueLabels(_ names: [String]) -> [String] {
+    var seen: [String: Int] = [:]
+    return names.map { name in
+        seen[name, default: 0] += 1
+        return seen[name]! == 1 ? name : "\(name) (\(seen[name]!))"
+    }
 }
 
 /// Port: one screenshot of the window a guess is for, as PNG data in memory. The helper's adapter
@@ -122,12 +131,7 @@ public final class GuessRunner {
 
     /// One distinct label per Project: twins are numbered, and none can be mistaken for "No Project".
     static func labels(for projects: [GuessRequest.Choice]) -> [String] {
-        var seen: [String: Int] = [:]
-        return projects.map { project in
-            let base = project.name == none ? "\(project.name) (Project)" : project.name
-            seen[base, default: 0] += 1
-            return seen[base]! == 1 ? base : "\(base) (\(seen[base]!))"
-        }
+        uniqueLabels(projects.map { $0.name == none ? "\($0.name) (Project)" : $0.name })
     }
 }
 

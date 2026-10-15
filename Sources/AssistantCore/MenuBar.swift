@@ -120,6 +120,7 @@ struct NextLine {
         case .deepInTheMorning: "Deep work while it's morning"
         case .shallowInTheAfternoon: "A shallow one for the afternoon"
         case .oldest: "Oldest open Task"
+        case let .chosen(text): text
         }
         self.reason = wontFitBefore.map { "\(why) · won't fit before \(Self.format($0, "HH:mm", calendar))" } ?? why
     }

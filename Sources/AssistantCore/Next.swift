@@ -16,6 +16,8 @@ public enum Next: Equatable, Sendable {
         case deepInTheMorning
         case shallowInTheAfternoon
         case oldest
+        /// Sonnet's one-line reason, for a pick among Tasks the rule scored the same.
+        case chosen(String)
     }
 
     public var task: Task.ID? {
@@ -76,6 +78,27 @@ struct NextRule {
         let pool = fitting.isEmpty ? candidates : fitting
         let chosen = pool.min(by: ranksAbove)!
         return .task(chosen.id, reason: reason(for: chosen), wontFitBefore: fitting.isEmpty ? block.end : nil)
+    }
+
+    /// The Tasks tied at the top (the rule scores them the same, age aside), at most `limit`, when
+    /// there are at least two. Never for an interrupted Task coming back.
+    func tie(from open: [Task], limit: Int) -> [Task]? {
+        let notSkipped = open.filter { ($0.skippedUntil ?? .distantPast) <= now }
+        let candidates = notSkipped.isEmpty ? open : notSkipped
+        guard !candidates.contains(where: \.resumeAfterInterruption), let best = candidates.min(by: ranksAbove) else {
+            return nil
+        }
+        let block = freeBlock()
+        let fitting = candidates.filter { fits($0, block) }
+        let pool = urgency(best) == Self.dueWithinADay || fitting.isEmpty ? candidates : fitting
+        let ranked = pool.sorted(by: ranksAbove)
+        let top = ranked.filter { scoresSame($0, ranked[0]) }
+        return top.count >= 2 ? Array(top.prefix(limit)) : nil
+    }
+
+    private func scoresSame(_ a: Task, _ b: Task) -> Bool {
+        urgency(a) == urgency(b) && (urgency(a) == 0 || a.deadline == b.deadline)
+            && continues(a) == continues(b) && suitsTimeOfDay(a) == suitsTimeOfDay(b)
     }
 
     // MARK: Free block
