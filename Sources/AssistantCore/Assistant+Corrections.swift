@@ -5,6 +5,7 @@ extension Assistant {
     /// Nothing is learned unless Dara then chooses Always.
     public func correctNow(_ correction: Correction) throws {
         guard let window = now.window else { throw Failure.noWindow }
+        guard !window.isExcluded else { throw Failure.windowExcluded }
         if case let .project(id) = correction, projectsByID[id]?.status != .active {
             throw Failure.unknownProject(id)
         }
@@ -57,7 +58,7 @@ extension Assistant {
     public func markNeutral(_ key: NeutralKey, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard !(NeutralKey.defaults + neutrals).contains(key) else { throw Failure.alreadyNeutral(key) }
         return try perform(.markNeutral, "Treated \(key.label(in: now.window)) as Neutral", by: startedBy,
-                           writing: Change(neutrals: neutrals + [key]))
+                           writing: changingSettings { $0.neutrals.append(key) })
     }
 
     /// The "Always …?" waiting after a correction, as a Decision.

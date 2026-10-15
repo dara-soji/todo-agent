@@ -21,7 +21,7 @@ import Testing
         #expect(Set(tools.map(\.name)) == [
             "get_now", "get_next", "list_tasks", "list_projects", "get_calendar_today", "get_operation_log",
             "add_task", "edit_task", "bulk_edit_tasks", "complete_task", "snooze_task", "drop_task", "delete_task",
-            "restore_task", "commit_task", "skip_task",
+            "restore_task", "commit_task", "skip_task", "add_exclusion", "remove_exclusion",
         ])
     }
 
@@ -31,7 +31,7 @@ import Testing
         "add_task": .addTask, "edit_task": .editTask, "bulk_edit_tasks": .bulkEditTasks,
         "complete_task": .completeTask, "snooze_task": .snoozeTask,
         "drop_task": .dropTask, "delete_task": .deleteTask, "restore_task": .restoreTask, "commit_task": .commitTask,
-        "skip_task": .skipTask,
+        "skip_task": .skipTask, "add_exclusion": .addExclusion, "remove_exclusion": .removeExclusion,
     ]
 
     @Test func readToolsAreReadOnlyAndOperationToolsDeclareTheirGuardrailTier() async throws {
@@ -71,7 +71,10 @@ import Testing
             "drop_task": ["task_id": try fresh()], "delete_task": ["task_id": try fresh()],
             "restore_task": ["task_id": try fresh(deleted: true)],
             "bulk_edit_tasks": ["task_ids": [try fresh(), try fresh()], "kind": "deep"],
+            "add_exclusion": ["app": "com.example.one"],
+            "remove_exclusion": ["app": "com.example.two"],
         ]
+        try harness.assistant.exclude(.app("com.example.two"))
         #expect(Set(calls.keys) == Set(tools.map(\.name)))
 
         for tool in tools {
@@ -385,9 +388,35 @@ import Testing
         let (_, text) = try await harness.callRaw("get_now", [:])
 
         #expect(text.contains("\"app\":\"Excluded\""))
+        #expect(text.contains("\"excluded\":true"))
         for secret in ["SECRET-TITLE", "secret.example", "My Bank", "com.example.bank"] {
             #expect(!text.contains(secret), "\(secret) reached Claude Code")
         }
+    }
+
+    @Test func claudeCodeCanExcludeAtOnceButRemovingAsks() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+
+        let added = try await harness.call("add_exclusion", ["site": "bank.example"])
+        #expect(added["status"] == .string("ran"))
+        #expect(harness.assistant.exclusions == [.site("bank.example")])
+
+        let removed = try await harness.call("remove_exclusion", ["site": "bank.example"])
+        #expect(removed["status"] == .string("pending"))
+        #expect(harness.assistant.exclusions == [.site("bank.example")])
+
+        let (_, log) = try await harness.callRaw("get_operation_log", [:])
+        #expect(!log.contains("bank.example"))
+    }
+
+    @Test(arguments: [[String: Value](), ["app": "a", "site": "b"], ["sender": "no-at"]])
+    func anExclusionNamesExactlyOneValidThing(_ arguments: [String: Value]) async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let (isError, _) = try await harness.callRaw("add_exclusion", arguments)
+        #expect(isError)
+        #expect(harness.assistant.exclusions.isEmpty)
     }
 
     @Test func listTasksFiltersByStatusAndProject() async throws {

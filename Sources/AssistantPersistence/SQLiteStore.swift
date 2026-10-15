@@ -183,9 +183,8 @@ extension SQLiteStore: AssistantStore {
             projects: try loadProjects(),
             tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
-            guardrailRules: try loadGuardrailRules(),
-            neutrals: try loadNeutrals(),
-            exclusions: try loadExclusions())
+            settings: Settings(
+                guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions()))
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -252,9 +251,11 @@ extension SQLiteStore: AssistantStore {
         try run("BEGIN IMMEDIATE;")
         do {
             for project in change.projects { try upsert(project) }
-            if let rules = change.guardrailRules { try writeSetting(Self.guardrailKey, try encode(rules)) }
-            if let neutrals = change.neutrals { try writeSetting(Self.neutralsKey, try encode(neutrals)) }
-            if let exclusions = change.exclusions { try writeSetting(Self.exclusionsKey, try encode(exclusions)) }
+            if let settings = change.settings {
+                try writeSetting(Self.guardrailKey, try encode(settings.guardrailRules))
+                try writeSetting(Self.neutralsKey, try encode(settings.neutrals))
+                try writeSetting(Self.exclusionsKey, try encode(settings.exclusions))
+            }
             for task in change.tasks {
                 try execute("""
                     INSERT INTO tasks (id, json) VALUES (?, ?)

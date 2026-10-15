@@ -50,6 +50,7 @@ public final class AssistantTools {
         case let error as ToolError: error.message
         case let failure as Assistant.Failure: Shapes.explain(failure)
         case let invalid as Matcher.Invalid: "Invalid Matcher: \(invalid)"
+        case let invalid as Exclusion.Invalid: "Invalid exclusion: \(invalid)"
         default: "\(error)"
         }
     }

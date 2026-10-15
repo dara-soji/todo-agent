@@ -68,9 +68,16 @@ import AssistantTestSupport
     ])
     func theMostSensitiveWindowsAreAlwaysExcluded(_ name: String, bundleID: String, title: String, sensitive: Bool) {
         let assistant = makeAssistant()
-        assistant.receive(.activeWindow(app: App(bundleID: bundleID, name: name), windowTitle: title, sensitive: sensitive))
+        assistant.receive(.activeWindow(app: App(bundleID: bundleID, name: name), windowTitle: title, excluded: sensitive))
         #expect(assistant.now.window?.isExcluded == true, "\(name)")
         #expect(assistant.now.window?.title == nil, "\(name)")
+    }
+
+    @Test func passwordAppsAreLeftToDarasListNotAlwaysExcluded() {
+        let assistant = makeAssistant()
+        assistant.receive(.activeWindow(app: App(bundleID: "com.apple.Passwords", name: "Passwords"), windowTitle: "Passwords"))
+        #expect(assistant.now.window?.isExcluded == false)
+        #expect(assistant.exclusionToOffer == .app("com.apple.Passwords"))
     }
 
     @Test func alwaysExcludedOnesAreNotOnTheListAndCannotBeRemoved() throws {
@@ -114,6 +121,32 @@ import AssistantTestSupport
         #expect(assistant.exclusions == [.sender("@bank.example")])
     }
 
+    @Test func undoingAnExclusionAsksLikeRemovingIt() throws {
+        let assistant = makeAssistant()
+        try assistant.exclude(.app("com.example.bank"))
+
+        guard case .pending = try assistant.undo(try #require(assistant.operationLog.last).id) else {
+            Issue.record("undoing an exclusion should ask"); return
+        }
+        #expect(assistant.exclusions == [.app("com.example.bank")])
+    }
+
+    @Test func theLogSaysAnExclusionChangedButNotWhat() throws {
+        let assistant = makeAssistant()
+        try assistant.exclude(.site("bank.example"))
+        #expect(assistant.operationLog.last?.summary == "Added an exclusion")
+    }
+
+    @Test func anExcludedWindowCannotBeCorrected() throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        try assistant.exclude(.app("com.example.bank"))
+        assistant.receive(.activeWindow(app: bank, windowTitle: "Balance"))
+
+        #expect(throws: Assistant.Failure.windowExcluded) { try assistant.correctNow(.project(todo.id)) }
+        #expect(throws: Assistant.Failure.windowExcluded) { try assistant.correctNow(.neutral) }
+    }
+
     @Test func removingAnExclusionCannotBeLoosened() {
         let assistant = makeAssistant()
         #expect(throws: Assistant.Failure.cannotLoosen(.removeExclusion)) { try assistant.loosen(.removeExclusion) }
@@ -144,6 +177,8 @@ import AssistantTestSupport
         try assistant.exclude(.notesFolder("Private"))
 
         #expect(assistant.isExcluded(sender: "Alerts@Bank.example"))
+        #expect(assistant.isExcluded(sender: "Bank Alerts <alerts@mail.bank.example>"))
+        #expect(!assistant.isExcluded(sender: "someone@notbank.example"))
         #expect(assistant.isExcluded(sender: "doctor@clinic.example"))
         #expect(!assistant.isExcluded(sender: "nurse@clinic.example"))
         #expect(assistant.isExcluded(notesFolder: "Private"))

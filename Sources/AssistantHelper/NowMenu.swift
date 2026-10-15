@@ -13,7 +13,7 @@ final class NowMenu: NSObject {
     }
 
     func items() -> [NSMenuItem] {
-        guard assistant.now.window != nil else { return [] }
+        guard let window = assistant.now.window, !window.isExcluded else { return [] }
         var items = [notThisItem()]
         if let key = assistant.neutralToOffer {
             let treat = NSMenuItem(

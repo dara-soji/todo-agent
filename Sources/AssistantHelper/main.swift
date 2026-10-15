@@ -65,15 +65,19 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         nudgePanel.onSwitchTask = { [weak self] in self?.openQuickAdd(assistant) }
         startMCPServer(assistant, statusItem: statusItem, changed: changed)
 
+        let idleSensor = IdleSensor()
+        self.idleSensor = idleSensor
+        idleSensor.start(delivering: receive)
+        // Without the store, the exclude list can't be trusted, so nothing is read at all.
+        guard storeProblem == nil else { return }
         _ = ActiveWindowSensor.requestAccessibility()
         let windowSensor = ActiveWindowSensor()
         windowSensor.excludesApp = { assistant.excludesApp($0) }
+        windowSensor.excludesAnySite = { assistant.excludesAnySite }
         let calendarSensor = CalendarSensor()
-        let idleSensor = IdleSensor()
-        (self.windowSensor, self.calendarSensor, self.idleSensor) = (windowSensor, calendarSensor, idleSensor)
+        (self.windowSensor, self.calendarSensor) = (windowSensor, calendarSensor)
         windowSensor.start(delivering: receive)
         calendarSensor.start(delivering: receive)
-        idleSensor.start(delivering: receive)
     }
 
     /// Quitting ends every conversation, so pending Asks are logged as expired, not run.

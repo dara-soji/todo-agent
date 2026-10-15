@@ -22,7 +22,7 @@ final class ExclusionsMenu: NSObject {
     func listItem() -> NSMenuItem {
         let root = NSMenuItem(title: "Exclusions", action: nil, keyEquivalent: "")
         let menu = NSMenu()
-        menu.addItem(withTitle: "Always: private windows, password fields and prompts", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Always: private-browsing windows, password fields and prompts", action: nil, keyEquivalent: "")
             .isEnabled = false
         menu.addItem(.separator())
         for exclusion in assistant.exclusions {
@@ -39,7 +39,7 @@ final class ExclusionsMenu: NSObject {
         return root
     }
 
-    private final class Box: NSObject {
+    private final class ExclusionBox: NSObject {
         let exclusion: Exclusion
         init(_ exclusion: Exclusion) { self.exclusion = exclusion }
     }
@@ -47,17 +47,17 @@ final class ExclusionsMenu: NSObject {
     private func item(_ title: String, _ selector: Selector, _ exclusion: Exclusion) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
-        item.representedObject = Box(exclusion)
+        item.representedObject = ExclusionBox(exclusion)
         return item
     }
 
     @objc private func exclude(_ sender: NSMenuItem) {
-        guard let box = sender.representedObject as? Box else { return }
+        guard let box = sender.representedObject as? ExclusionBox else { return }
         Attempt.run("Couldn't exclude it", then: onChange) { try assistant.exclude(box.exclusion) }
     }
 
     @objc private func remove(_ sender: NSMenuItem) {
-        guard let box = sender.representedObject as? Box else { return }
+        guard let box = sender.representedObject as? ExclusionBox else { return }
         Attempt.run("Couldn't stop excluding it", then: onChange) { try assistant.removeExclusion(box.exclusion) }
     }
 

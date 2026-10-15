@@ -6,12 +6,18 @@ import AppKit
 /// Incognito windows in Chromium browsers are never read. Safari can't say whether a window is
 /// private, so its private windows are left to Exclusions (ticket 10).
 final class BrowserURLReader: @unchecked Sendable {
+    /// What the scripts return for a private-browsing window, which is never read.
+    private static let privateWindowMark = "PRIVATE"
+
+    /// Browsers whose page the assistant may not be able to read (Firefox has no script).
+    static let browsers: Set<String> = Set(scripts.keys).union(["org.mozilla.firefox"])
+
     private static func chromium(_ id: String) -> String {
         """
         with timeout of 2 seconds
             tell application id "\(id)"
                 if (count of windows) is 0 then return ""
-                if mode of front window is "incognito" then return "PRIVATE"
+                if mode of front window is "incognito" then return "\(privateWindowMark)"
                 return URL of active tab of front window
             end tell
         end timeout
@@ -66,7 +72,7 @@ final class BrowserURLReader: @unchecked Sendable {
             deniedAt[bundleID] = Date()
         }
         guard let text = result?.stringValue, !text.isEmpty else { return .unknown }
-        if text == "PRIVATE" { return .privateWindow }
+        if text == Self.privateWindowMark { return .privateWindow }
         return URL(string: text).map(FrontTab.page) ?? .unknown
     }
 }

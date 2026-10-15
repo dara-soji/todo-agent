@@ -19,10 +19,10 @@ public enum Exclusion: Hashable, Sendable, Codable {
         case malformedSender(String)
     }
 
-    /// Always Excluded, whatever the list says: system password prompts and password apps.
+    /// Always Excluded, whatever the list says: system password prompts. Password managers are
+    /// Dara's choice, offered at setup.
     static let alwaysExcludedApps: Set<String> = [
         "com.apple.SecurityAgent", "com.apple.LocalAuthentication.UIAgent", "com.apple.loginwindow",
-        "com.apple.keychainaccess", "com.apple.Passwords",
     ]
 
     /// Private-browsing windows that say so in their title (Firefox).

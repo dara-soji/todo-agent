@@ -36,6 +36,8 @@ public final class Assistant {
         case alreadyExcluded(Exclusion)
         /// Not on the exclude list (always-Excluded windows never are).
         case notExcluded(Exclusion)
+        /// An Excluded window can't be corrected: nothing about it is known.
+        case windowExcluded
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -45,7 +47,9 @@ public final class Assistant {
     /// For time of day and dates as Dara reads them.
     let calendar: Calendar
     private let store: AssistantStore
-    private var guardrail: Guardrail
+    /// Dara's tier rules, Neutrals and exclude list.
+    public private(set) var settings: Settings
+    private var guardrail: Guardrail { Guardrail(rules: settings.guardrailRules) }
     /// Operations waiting for Dara to confirm, oldest first.
     public private(set) var asks: [Ask] = []
     /// The conversation the current call comes from; see `inSession`.
@@ -69,9 +73,9 @@ public final class Assistant {
     /// Checked-out branch by full repo path.
     private var branches: [String: String] = [:]
     /// Apps and sites Dara made Neutral, on top of the defaults.
-    public private(set) var neutrals: [NeutralKey]
+    public var neutrals: [NeutralKey] { settings.neutrals }
     /// Dara's exclude list, on top of the windows that are always Excluded.
-    public private(set) var exclusions: [Exclusion]
+    public var exclusions: [Exclusion] { settings.exclusions }
     /// Dara's "Not this" for one window; it lasts while that window does.
     var correction: (window: ActiveWindow, to: Correction)?
     /// The "Always …?" waiting after a correction.
@@ -108,16 +112,14 @@ public final class Assistant {
         self.projectsByID = Dictionary(snapshot.projects.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         self.tasksByID = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         self.operationLog = snapshot.log
-        self.guardrail = Guardrail(rules: snapshot.guardrailRules)
-        self.neutrals = snapshot.neutrals
-        self.exclusions = snapshot.exclusions
+        self.settings = snapshot.settings
     }
 
     public func receive(_ signal: Signal) {
         switch signal {
-        case let .activeWindow(app, title, url, sensitive):
+        case let .activeWindow(app, title, url, excluded):
             // Exclusions are applied here, as the Signal enters, before anything else sees it.
-            let window = sensitive ? .excluded : excluding(ActiveWindow(app: app, title: title, url: url))
+            let window = excluded ? .excluded : excluding(ActiveWindow(app: app, title: title, url: url))
             let since = window == now.window ? now.since ?? clock.now : clock.now
             resolve(Now.Visit(window: window, since: since))
         case let .calendar(events):
@@ -171,7 +173,14 @@ public final class Assistant {
     }
 
     public var guardrailRules: [GuardrailRule] {
-        guardrail.rules
+        settings.guardrailRules
+    }
+
+    /// A Change writing Dara's settings with `edit` applied.
+    func changingSettings(_ edit: (inout Settings) -> Void) -> Change {
+        var settings = self.settings
+        edit(&settings)
+        return Change(settings: settings)
     }
 
     /// Runs `body` as part of a conversation, so Asks it makes group and expire with that conversation.
@@ -195,7 +204,12 @@ public final class Assistant {
         // Scope covers where things are and where they would go, so moving a Task out of a
         // tightened Project, or into a loosened one, can't slip past the Guardrail.
         let projects = Set((before.tasks + after.tasks).map(\.project) + after.projects.map { Optional($0.id) })
-        let tier = guardrail.tier(for: kind, projects: Array(projects), size: after.tasks.count)
+        var tier = guardrail.tier(for: kind, projects: Array(projects), size: after.tasks.count)
+        // Whatever takes something off the exclude list (an undo, say) asks like removing it does.
+        if let new = after.settings, !Set(exclusions).isSubset(of: Set(new.exclusions)),
+           guardrail.tier(for: .removeExclusion) == .ask, tier == .auto {
+            tier = .ask
+        }
         guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
         let creates = Set(after.tasks.filter { tasksByID[$0.id] == nil }.map(\.id.rawValue)
             + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue))
@@ -237,9 +251,7 @@ public final class Assistant {
         for operation in ask.operations {
             change.tasks += operation.after.tasks
             change.projects += operation.after.projects
-            if let rules = operation.after.guardrailRules { change.guardrailRules = rules }
-            if let neutrals = operation.after.neutrals { change.neutrals = neutrals }
-            if let exclusions = operation.after.exclusions { change.exclusions = exclusions }
+            if let settings = operation.after.settings { change.settings = settings }
         }
         guard committedCount(after: change) <= 1 else { throw Failure.secondCommittedTask }
         let entries = ask.operations.map {
@@ -284,7 +296,7 @@ public final class Assistant {
         if let session, let index = asks.lastIndex(where: { ask in
             ask.session == session && ask.startedBy == startedBy
                 && clock.now.timeIntervalSince(ask.created) <= Self.askGroupWindow
-                && ask.touches.isDisjoint(with: operation.touches) && operation.after.guardrailRules == nil
+                && ask.touches.isDisjoint(with: operation.touches) && operation.after.settings == nil
         }) {
             asks[index].operations.append(operation)
             return asks[index].id
@@ -334,18 +346,14 @@ public final class Assistant {
             && operation.before.projects.allSatisfy { project in
                 operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
             }
-            && (operation.before.guardrailRules.map { $0 == guardrail.rules } ?? true)
-            && (operation.before.neutrals.map { $0 == neutrals } ?? true)
-            && (operation.before.exclusions.map { $0 == exclusions } ?? true)
+            && (operation.before.settings.map { $0 == settings } ?? true)
     }
 
     /// Whether everything in `change` is still exactly as it says.
     private func isCurrent(_ change: Change) -> Bool {
         change.tasks.allSatisfy { tasksByID[$0.id] == $0 }
             && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
-            && (change.guardrailRules.map { $0 == guardrail.rules } ?? true)
-            && (change.neutrals.map { $0 == neutrals } ?? true)
-            && (change.exclusions.map { $0 == exclusions } ?? true)
+            && (change.settings.map { $0 == settings } ?? true)
     }
 
     // MARK: Tiers
@@ -367,15 +375,16 @@ public final class Assistant {
     /// Back to the default tier for that Operation and scope.
     @discardableResult
     public func resetTier(_ kind: OperationKind, in project: Project.ID? = nil) throws -> Outcome {
-        let rules = guardrail.rules.filter { !($0.kind == kind && $0.project == project) }
         return try perform(.changeGuardrail, "Default tier for \(kind.rawValue)", by: .dara,
-                           writing: Change(guardrailRules: rules))
+                           writing: changingSettings { $0.guardrailRules.removeAll { $0.kind == kind && $0.project == project } })
     }
 
     private func setRule(_ rule: GuardrailRule, _ summary: String) throws -> Outcome {
         let scope = rule.project.flatMap(project).map { " in \($0.name)" } ?? ""
-        let rules = guardrail.rules.filter { !($0.kind == rule.kind && $0.project == rule.project) } + [rule]
-        return try perform(.changeGuardrail, summary + scope, by: .dara, writing: Change(guardrailRules: rules))
+        return try perform(.changeGuardrail, summary + scope, by: .dara, writing: changingSettings { settings in
+            settings.guardrailRules.removeAll { $0.kind == rule.kind && $0.project == rule.project }
+            settings.guardrailRules.append(rule)
+        })
     }
 
     /// What `change` will overwrite. Something new is recorded as it would be after an undo:
@@ -384,9 +393,7 @@ public final class Assistant {
         Change(
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
             projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() },
-            guardrailRules: change.guardrailRules.map { _ in guardrail.rules },
-            neutrals: change.neutrals.map { _ in neutrals },
-            exclusions: change.exclusions.map { _ in exclusions })
+            settings: change.settings.map { _ in settings })
     }
 
     /// How many Tasks in play would be committed once `change` is written.
@@ -404,9 +411,7 @@ public final class Assistant {
     }
 
     private func apply(_ change: Change) {
-        if let rules = change.guardrailRules { guardrail.rules = rules }
-        if let neutrals = change.neutrals { self.neutrals = neutrals }
-        if let exclusions = change.exclusions { self.exclusions = exclusions }
+        if let settings = change.settings { self.settings = settings }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }

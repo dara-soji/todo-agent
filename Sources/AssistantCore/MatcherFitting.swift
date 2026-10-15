@@ -83,10 +83,13 @@ struct MatcherFitting {
 
     /// The Neutral key "Treat as Neutral" would add: the site (with its port) in a browser, else the app.
     func proposedNeutral(for window: ActiveWindow) -> NeutralKey {
-        if let url = window.url, let host = url.host(percentEncoded: false) {
-            return .site(withoutWWW(host.lowercased()) + (url.port.map { ":\($0)" } ?? ""))
-        }
-        return .app(window.app.bundleID)
+        proposedSite(for: window).map(NeutralKey.site) ?? .app(window.app.bundleID)
+    }
+
+    /// The window's site: its host (without www) and port, if it shows a page.
+    func proposedSite(for window: ActiveWindow) -> String? {
+        guard let url = window.url, let host = url.host(percentEncoded: false) else { return nil }
+        return withoutWWW(host.lowercased()) + (url.port.map { ":\($0)" } ?? "")
     }
 
     /// Host (with port) and decoded path, as URL prefixes are written.
