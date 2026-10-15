@@ -19,6 +19,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private let quickAdd = QuickAddPanel()
     private let added = AddedPanel()
     private var nudgePanel: NudgePanel?
+    private var guessMaker: GuessMaker?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -33,6 +34,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
             nowMenu: nowMenu, exclusionsMenu: exclusionsMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
+        statusItem.currentSpend = { assistant.apiSpendSinceLaunch }
         statusItem.currentMenuBar = {
             assistant.expireDueAsks()
             return assistant.menuBar
@@ -41,11 +43,15 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 
         let nudgePanel = NudgePanel(assistant: assistant)
         self.nudgePanel = nudgePanel
+        var guessMaker: GuessMaker?
         let receive: (Signal) -> Void = { signal in
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
             nudgePanel.update()
+            guessMaker?.check()
         }
+        guessMaker = GuessMaker(assistant: assistant, deliver: receive)
+        self.guessMaker = guessMaker
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
         gitWatcher.watch(assistant.repoPathsToWatch)

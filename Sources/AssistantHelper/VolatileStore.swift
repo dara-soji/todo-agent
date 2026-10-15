@@ -6,6 +6,10 @@ final class VolatileStore: AssistantStore {
 
     func load() throws -> StoreSnapshot { snapshot }
 
+    func audit(_ call: APICall) throws {
+        snapshot.audit.append(call)
+    }
+
     func record(_ block: NowBlock) throws {
         snapshot.history.append(block)
     }

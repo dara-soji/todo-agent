@@ -18,6 +18,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onAddTask: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
     var claudeCode: ClaudeCodeConnection.State = .starting
+    /// API spend since launch, from the audit log.
+    var currentSpend: () -> Double = { 0 }
     /// The latest state, read whenever the dropdown opens: Next can change with time alone.
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
@@ -48,8 +50,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         switch menuBar.marker {
         case .project:
             title.append(NSAttributedString(string: "■ ", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(11)]))
+        case .guess:
+            // Hollow dashed dot: a guess, not a match.
+            title.append(NSAttributedString(string: "◌ ", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(11)]))
         case .noProject, .away:
-            text[.foregroundColor] = Theme.steel  // No marker: the hollow dashed dot is kept for Haiku guesses (ticket 11).
+            text[.foregroundColor] = Theme.steel
         case .unknown:
             break
         }
@@ -124,6 +129,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         case let .unavailable(reason):
             menu.addItem(detail("Claude Code unavailable: \(reason)"))
         }
+        menu.addItem(action(ClaudeAPIKey.load() == nil ? "Set Claude API key…" : "Replace Claude API key…",
+                            #selector(setAPIKey)))
+        menu.addItem(metadata(String(format: "Claude API since launch: $%.4f", currentSpend())))
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
@@ -166,6 +174,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
         item.target = self
         return item
+    }
+
+    /// Dara types the key into a secure field; it goes straight to the Keychain.
+    @objc private func setAPIKey() {
+        let alert = NSAlert()
+        alert.messageText = "Claude API key"
+        alert.informativeText = "Used for the occasional screenshot guess and, later, Next and email Triage. Kept in your Keychain."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 300, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        Attempt.run("Couldn't save the key", then: {}) { try ClaudeAPIKey.save(key) }
     }
 
     @objc private func connectClaudeCode() {

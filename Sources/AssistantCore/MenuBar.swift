@@ -11,6 +11,8 @@ public struct MenuBar: Equatable, Sendable {
         case noProject
         /// Dara is idle long enough to be away.
         case away
+        /// A Haiku guess: drawn as a hollow dashed dot with "?".
+        case guess
     }
 
     /// The menu-bar item's text.
@@ -59,6 +61,11 @@ public struct MenuBar: Equatable, Sendable {
             marker = .away
             nowDetail = "Away"
             evidence = nil
+        } else if let project, let match = now.match, match.basis == .guess {
+            title = Self.shorten(project.shortName.uppercased()) + "?"
+            marker = .guess
+            nowDetail = "\(project.name) · guess"
+            evidence = "A guess from a screenshot"
         } else if let project, let match = now.match {
             title = Self.shorten(project.shortName.uppercased())
             marker = .project
@@ -84,6 +91,8 @@ public struct MenuBar: Equatable, Sendable {
             return "Kept while \(key.label(in: window)) is Neutral"
         case .correction:
             return "You said so"
+        case .guess:
+            return "A guess from a screenshot"
         }
     }
 

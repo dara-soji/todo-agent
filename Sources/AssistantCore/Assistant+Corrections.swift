@@ -9,6 +9,10 @@ extension Assistant {
         if case let .project(id) = correction, projectsByID[id]?.status != .active {
             throw Failure.unknownProject(id)
         }
+        // Saying a guessed window is something else forgets the guess for that window.
+        if now.match?.basis == .guess, correction != .project(now.match!.project), let key = guessKey(for: window) {
+            guessCache[key] = .some(nil)
+        }
         self.correction = (window, correction)
         switch correction {
         case let .project(id):

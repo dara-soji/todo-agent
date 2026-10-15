@@ -33,6 +33,16 @@ final class TasksMenu: NSObject {
             case let .offer(.alwaysMatch(matcher, project)):
                 let name = assistant.project(project)?.shortName.uppercased() ?? "it"
                 return offerItem("Always match \(MatcherText.format(matcher)) to \(name)?")
+            case let .isThis(project):
+                let name = assistant.project(project)?.name ?? "this Project"
+                let item = NSMenuItem(title: "Is this \(name)?", action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                let yes = NSMenuItem(title: "Yes", action: #selector(confirmGuess), keyEquivalent: "")
+                yes.target = self
+                item.submenu?.addItem(yes)
+                item.submenu?.addItem(withTitle: "No, it's… (use Not this ▸ under Now)", action: nil, keyEquivalent: "")
+                    .isEnabled = false
+                return item
             case let .newTask(title):
                 let item = NSMenuItem(title: "New task: \(title)?", action: nil, keyEquivalent: "")
                 item.submenu = NSMenu()
@@ -105,6 +115,10 @@ final class TasksMenu: NSObject {
             item.submenu?.addItem(choice)
         }
         return item
+    }
+
+    @objc private func confirmGuess() {
+        Attempt.run("Couldn't confirm it", then: onChange) { try assistant.confirmGuess() }
     }
 
     @objc private func addNewTask() {

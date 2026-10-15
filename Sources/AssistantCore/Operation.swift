@@ -147,6 +147,8 @@ public protocol AssistantStore {
     func write(_ change: Change, log entries: [LogEntry]) throws
     /// Appends a closed Now history block.
     func record(_ block: NowBlock) throws
+    /// Appends a line to the API audit log.
+    func audit(_ call: APICall) throws
 }
 
 /// Everything the store holds.
@@ -156,12 +158,14 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var log: [LogEntry]
     public var settings: Settings
     public var history: [NowBlock]
+    public var audit: [APICall]
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
-        history: [NowBlock] = []
+        history: [NowBlock] = [], audit: [APICall] = []
     ) {
         self.history = history
+        self.audit = audit
         self.settings = settings
         self.projects = projects
         self.tasks = tasks

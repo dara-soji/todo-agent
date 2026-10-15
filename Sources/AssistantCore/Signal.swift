@@ -25,6 +25,8 @@ public enum Signal: Equatable, Sendable {
     case userIdle(seconds: TimeInterval)
     /// The branch checked out in a watched repo, given by its full path.
     case git(repo: String, branch: String)
+    /// Haiku's guess for a window from its screenshot: a Project, or nil for none or no answer.
+    case projectGuess(key: GuessKey, project: Project.ID?)
 }
 
 /// A calendar event as the calendar reports it.

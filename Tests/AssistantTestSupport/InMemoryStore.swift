@@ -14,6 +14,11 @@ public final class InMemoryStore: AssistantStore {
         snapshot
     }
 
+    public func audit(_ call: APICall) throws {
+        if failWrites { throw WriteFailed() }
+        snapshot.audit.append(call)
+    }
+
     public func record(_ block: NowBlock) throws {
         if failWrites { throw WriteFailed() }
         snapshot.history.append(block)

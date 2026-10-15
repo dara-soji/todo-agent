@@ -35,6 +35,8 @@ public struct Now: Equatable, Sendable {
             case neutralHold(NeutralKey)
             /// Dara said this window belongs to the Project.
             case correction
+            /// Haiku's guess from a screenshot: never confident, never held, never Drift.
+            case guess
         }
 
         public let project: Project.ID
@@ -44,7 +46,7 @@ public struct Now: Equatable, Sendable {
         public var evidence: Matcher? {
             switch basis {
             case let .matcher(matcher), let .meeting(matcher, _): matcher
-            case .neutralHold, .correction: nil
+            case .neutralHold, .correction, .guess: nil
             }
         }
 
