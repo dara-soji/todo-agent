@@ -51,12 +51,14 @@ enum ToolCatalog {
         Spec(name: "get_now",
              description: "What Dara is doing now: the Project Now matched and why, the app, and the Committed Task. Window titles and URLs stay on the Mac.",
              input: object([:]),
-             output: output(["project": nullableObject, "evidence": nullableString, "app": nullableString,
-                             "since": nullableString, "away": boolean, "committed_task": nullableObject]),
+             output: output(["project": nullableObject, "basis": nullableString, "evidence": nullableString,
+                             "app": nullableString, "since": nullableString, "away": boolean,
+                             "committed_task": nullableObject]),
              kind: .read) { assistant, _ in
             let now = assistant.now
             return [
                 "project": now.project.flatMap(assistant.project).map(Shapes.project) ?? .null,
+                "basis": now.match.map { .string(Shapes.basis($0.basis)) } ?? .null,
                 "evidence": now.evidence.map { .string($0.pattern) } ?? .null,
                 "app": now.window.map { .string($0.app.name) } ?? .null,
                 "since": now.since.map(Shapes.date) ?? .null,

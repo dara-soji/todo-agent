@@ -26,9 +26,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let projectsMenu = ProjectsMenu(assistant: assistant)
         let tasksMenu = TasksMenu(assistant: assistant)
         let guardrailsMenu = GuardrailsMenu(assistant: assistant)
+        let nowMenu = NowMenu(assistant: assistant)
         let statusItem = StatusItemController(
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
-            storeProblem: storeProblem)
+            nowMenu: nowMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
         statusItem.currentMenuBar = {
             assistant.expireDueAsks()
@@ -50,6 +51,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         projectsMenu.onChange = changed
         tasksMenu.onChange = changed
         guardrailsMenu.onChange = changed
+        nowMenu.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
         startMCPServer(assistant, statusItem: statusItem, changed: changed)

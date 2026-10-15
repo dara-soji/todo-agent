@@ -55,7 +55,8 @@ import AssistantTestSupport
     @Test func onlyEventsUnderWayCount() throws {
         let assistant = makeAssistant()
         let dotnet = try assistant.declareProject(name: "Learning .NET", matchers: [.calendarKeyword("dotnet")])
-        assistant.receive(.activeWindow(app: zoom, windowTitle: "Zoom Meeting"))
+        // Not Neutral, so nothing holds the meeting's Project after it ends.
+        assistant.receive(.activeWindow(app: App(bundleID: "com.apple.Preview", name: "Preview"), windowTitle: "Slides.pdf"))
 
         assistant.receive(.calendar(events: [event("Dotnet study group", startsIn: 10, lasts: 30)]))
         #expect(assistant.now.project == nil)
@@ -72,7 +73,8 @@ import AssistantTestSupport
     @Test func sittingStillInAMatchingMeetingIsTheMeetingNotAway() throws {
         let assistant = makeAssistant()
         let dotnet = try assistant.declareProject(name: "Learning .NET", matchers: [.calendarKeyword("dotnet")])
-        assistant.receive(.activeWindow(app: zoom, windowTitle: "Zoom Meeting"))
+        // Not Neutral, so nothing holds the meeting's Project after it ends.
+        assistant.receive(.activeWindow(app: App(bundleID: "com.apple.Preview", name: "Preview"), windowTitle: "Slides.pdf"))
         assistant.receive(.calendar(events: [event("Dotnet study group")]))
 
         assistant.receive(.userIdle(seconds: 20 * 60))
@@ -84,7 +86,8 @@ import AssistantTestSupport
     @Test func idleWithNoMatchingMeetingIsStillAway() throws {
         let assistant = makeAssistant()
         try assistant.declareProject(name: "Learning .NET", matchers: [.calendarKeyword("dotnet")])
-        assistant.receive(.activeWindow(app: zoom, windowTitle: "Zoom Meeting"))
+        // Not Neutral, so nothing holds the meeting's Project after it ends.
+        assistant.receive(.activeWindow(app: App(bundleID: "com.apple.Preview", name: "Preview"), windowTitle: "Slides.pdf"))
         assistant.receive(.calendar(events: [event("Lunch")]))
 
         assistant.receive(.userIdle(seconds: 20 * 60))

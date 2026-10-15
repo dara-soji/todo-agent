@@ -28,6 +28,11 @@ public final class Assistant {
         case nothingNext
         /// A declined or expired entry ran nothing, so there is nothing to undo.
         case notUndoable(LogEntry.ID)
+        /// "Not this" needs a window to correct.
+        case noWindow
+        /// No "Always" is waiting.
+        case noOffer
+        case alreadyNeutral(NeutralKey)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -60,6 +65,23 @@ public final class Assistant {
     private var isIdle = false
     /// Checked-out branch by full repo path.
     private var branches: [String: String] = [:]
+    /// Apps and sites Dara made Neutral, on top of the defaults.
+    public private(set) var neutrals: [NeutralKey]
+    /// Dara's "Not this" for one window; it lasts while that window does.
+    var correction: (window: ActiveWindow, to: Correction)?
+    /// The "Always …?" waiting after a correction.
+    var offer: CorrectionOffer?
+    /// The Project Now was last on, cleared by any stretch of No Project or Away: what a Neutral
+    /// window holds.
+    private var lastConfident: Project.ID?
+    /// `lastConfident` as it was before the current window, for "Not this → Neutral" on a window
+    /// that had matched the wrong Project.
+    private var confidentBeforeWindow: Project.ID?
+    /// When the current run of Neutral windows began.
+    private var neutralSince: Date?
+
+    /// How long a Neutral app or site keeps Now on the last Project.
+    static let neutralHoldsFor: TimeInterval = 15 * 60
 
     public private(set) var now: Now = .unknown
 
@@ -73,6 +95,7 @@ public final class Assistant {
         self.tasksByID = Dictionary(snapshot.tasks.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
         self.operationLog = snapshot.log
         self.guardrail = Guardrail(rules: snapshot.guardrailRules)
+        self.neutrals = snapshot.neutrals
     }
 
     public func receive(_ signal: Signal) {
@@ -198,6 +221,7 @@ public final class Assistant {
             change.tasks += operation.after.tasks
             change.projects += operation.after.projects
             if let rules = operation.after.guardrailRules { change.guardrailRules = rules }
+            if let neutrals = operation.after.neutrals { change.neutrals = neutrals }
         }
         guard committedCount(after: change) <= 1 else { throw Failure.secondCommittedTask }
         let entries = ask.operations.map {
@@ -293,6 +317,7 @@ public final class Assistant {
                 operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
             }
             && (operation.before.guardrailRules.map { $0 == guardrail.rules } ?? true)
+            && (operation.before.neutrals.map { $0 == neutrals } ?? true)
     }
 
     /// Whether everything in `change` is still exactly as it says.
@@ -300,6 +325,7 @@ public final class Assistant {
         change.tasks.allSatisfy { tasksByID[$0.id] == $0 }
             && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
             && (change.guardrailRules.map { $0 == guardrail.rules } ?? true)
+            && (change.neutrals.map { $0 == neutrals } ?? true)
     }
 
     // MARK: Tiers
@@ -338,7 +364,8 @@ public final class Assistant {
         Change(
             tasks: change.tasks.map { tasksByID[$0.id] ?? $0.deleted(at: clock.now) },
             projects: change.projects.map { projectsByID[$0.id] ?? $0.archived() },
-            guardrailRules: change.guardrailRules.map { _ in guardrail.rules })
+            guardrailRules: change.guardrailRules.map { _ in guardrail.rules },
+            neutrals: change.neutrals.map { _ in neutrals })
     }
 
     /// How many Tasks in play would be committed once `change` is written.
@@ -357,32 +384,82 @@ public final class Assistant {
 
     private func apply(_ change: Change) {
         if let rules = change.guardrailRules { guardrail.rules = rules }
+        if let neutrals = change.neutrals { self.neutrals = neutrals }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }
 
     // MARK: Resolving Now
 
-    /// The foreground window beats the calendar: a meeting under way decides only when the window
-    /// matches no Project, or while Dara sits still in it (no input in a meeting is not Away).
-    /// The Neutral hold (ticket 08) belongs after the meeting, so a Neutral call app defers to it.
-    private func resolve(_ visit: Now.Visit?) {
+    /// Settles Now. In order: Away has no Project; a meeting decides while Dara sits still; Dara's
+    /// correction for this window; a Matcher on the foreground window; a meeting under way; and,
+    /// in a Neutral app or site, the last Project for up to `neutralHoldsFor` of Neutral.
+    func resolve(_ visit: Now.Visit?) {
+        let window = visit?.window
+        if window != now.window { confidentBeforeWindow = lastConfident }
+        // A correction, and its offer, are for the window they were made on; any other window ends them.
+        if let correction, correction.window != window {
+            self.correction = nil
+            offer = nil
+        }
+        let corrected = correction?.to
         let meeting = meetingMatch()
         let isAway = isIdle && meeting == nil
-        let match: Now.Match? = if isAway {
+        let foreground = corrected == nil ? window.flatMap(foregroundMatch) : nil
+        let neutral: NeutralKey? = window.flatMap { window in
+            if corrected == .neutral { return fitting.proposedNeutral(for: window) }
+            return corrected == nil && foreground == nil ? neutralKey(for: window) : nil
+        }
+
+        let confident: Now.Match? = if isAway {
             nil
         } else if isIdle {
             meeting
+        } else if case let .project(project)? = corrected {
+            Now.Match(project: project, basis: .correction)
+        } else if corrected == Correction.none {
+            nil
         } else {
-            visit.flatMap { foregroundMatch(for: $0.window) } ?? meeting
+            foreground ?? meeting
         }
+        var match = confident
+        // The hold's clock runs only while the hold is what decides Now.
+        if confident == nil, !isAway, !isIdle, corrected != Correction.none, let neutral {
+            neutralSince = neutralSince ?? clock.now
+            // A window corrected to Neutral had matched the wrong Project, so it holds the one from
+            // before it; a window just made Neutral holds that too until it has held anything.
+            let from = corrected == .neutral ? confidentBeforeWindow : lastConfident ?? confidentBeforeWindow
+            match = from.flatMap { hold(neutral, keeping: $0) }
+        } else {
+            neutralSince = nil
+        }
+
         if let match { lastMatched[match.project] = clock.now }
-        now = Now(visit: visit, match: match, isAway: isAway)
+        lastConfident = match?.project
+        now = Now(visit: visit, match: match, isAway: isAway, neutral: neutral)
+    }
+
+    /// `project`, while the run of Neutral is young enough and the Project still active.
+    private func hold(_ neutral: NeutralKey, keeping project: Project.ID) -> Now.Match? {
+        guard let since = neutralSince, clock.now.timeIntervalSince(since) < Self.neutralHoldsFor,
+              projectsByID[project]?.status == .active
+        else { return nil }
+        return Now.Match(project: project, basis: .neutralHold(neutral))
+    }
+
+    /// Whether the window is in any Neutral app or site, Matcher or not.
+    func isNeutral(_ window: ActiveWindow) -> Bool {
+        neutralKey(for: window) != nil
+    }
+
+    /// The Neutral app or site the window is in, from the defaults and Dara's own.
+    private func neutralKey(for window: ActiveWindow) -> NeutralKey? {
+        (NeutralKey.defaults + neutrals).first { fitting.fits($0, window) }
     }
 
     private func foregroundMatch(for window: ActiveWindow) -> Now.Match? {
         mostSpecific(activeProjects.flatMap { project in
-            project.matchers.filter { fitting.fits($0, window) }.map { Now.Match(project: project.id, evidence: $0) }
+            project.matchers.filter { fitting.fits($0, window) }.map { Now.Match(project: project.id, basis: .matcher($0)) }
         })
     }
 
@@ -391,7 +468,7 @@ public final class Assistant {
         return mostSpecific(activeProjects.flatMap { project in
             project.matchers.flatMap { matcher in
                 underWay.filter { fitting.fits(matcher, $0) }
-                    .map { Now.Match(project: project.id, evidence: matcher, event: $0) }
+                    .map { Now.Match(project: project.id, basis: .meeting(matcher, $0)) }
             }
         })
     }
@@ -400,8 +477,8 @@ public final class Assistant {
     /// Project, then to the first by name (candidates arrive in name order and `max` keeps the first).
     private func mostSpecific(_ candidates: [Now.Match]) -> Now.Match? {
         candidates.max { a, b in
-            if a.evidence.specificity != b.evidence.specificity {
-                return a.evidence.specificity < b.evidence.specificity
+            if let sa = a.evidence?.specificity, let sb = b.evidence?.specificity, sa != sb {
+                return sa < sb
             }
             return (lastMatched[a.project] ?? .distantPast) < (lastMatched[b.project] ?? .distantPast)
         }

@@ -33,6 +33,8 @@ public enum Next: Equatable, Sendable {
 public enum Decision: Equatable, Sendable {
     /// Operations waiting for Dara to confirm or decline.
     case confirm(Ask.ID)
+    /// After "Not this": make it stick? Always / Just this once.
+    case offer(CorrectionOffer)
     /// Skipped three times: Snooze till tomorrow, Drop it, or Keep it.
     case skippedThreeTimes(Task.ID)
 }

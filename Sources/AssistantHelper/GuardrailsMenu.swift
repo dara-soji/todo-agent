@@ -19,7 +19,7 @@ final class GuardrailsMenu: NSObject {
         .dropTask: "Drop a Task", .deleteTask: "Delete a Task", .restoreTask: "Restore a Task",
         .skipTask: "Skip Next", .keepTask: "Keep a skipped Task", .declareProject: "Declare a Project",
         .editProject: "Edit a Project", .archiveProject: "Archive a Project", .restoreProject: "Restore a Project",
-        .undo: "Undo",
+        .undo: "Undo", .markNeutral: "Treat an app or site as Neutral",
     ]
 
     func item() -> NSMenuItem {
