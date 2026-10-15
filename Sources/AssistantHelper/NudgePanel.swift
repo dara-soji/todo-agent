@@ -6,10 +6,10 @@ import AssistantCore
 @MainActor
 final class NudgePanel: NSObject {
     private let assistant: Assistant
-    private let panel = NSPanel.themed(size: NSSize(width: 380, height: 112))
+    private let panel = NSPanel.themed(size: NSSize(width: 380, height: 128))
     private let heading = NSTextField(labelWithString: "")
-    private let window = NSTextField(labelWithString: "")
-    private let task = NSTextField(labelWithString: "")
+    private let windowLabel = NSTextField(labelWithString: "")
+    private let taskLabel = NSTextField(labelWithString: "")
     private var shown: Nudge?
     var onChange: () -> Void = {}
     /// Switch task: opens quick-add so Dara can name what they're on now.
@@ -20,24 +20,26 @@ final class NudgePanel: NSObject {
         super.init()
         heading.font = Theme.mono(11, weight: .bold)
         heading.textColor = Theme.accent
-        for field in [window, task] {
+        for field in [windowLabel, taskLabel] {
             field.font = Theme.display(12)
             field.textColor = Theme.paper
             field.lineBreakMode = .byTruncatingTail
         }
-        window.textColor = Theme.steel
+        windowLabel.textColor = Theme.steel
         let buttons = NSStackView(views: [
             button("Back to it", #selector(backToIt)), button("Switch task", #selector(switchTask)),
             button("It's related", #selector(related)), button("Quiet 30m", #selector(quiet)),
         ])
-        let stack = NSStackView(views: [heading, window, task, buttons])
+        let stack = NSStackView(views: [heading, windowLabel, taskLabel, buttons])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 4
         stack.edgeInsets = NSEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
-        stack.frame = panel.contentView!.bounds
-        stack.autoresizingMask = [.width, .height]
-        panel.contentView?.addSubview(stack)
+        if let content = panel.contentView {
+            stack.frame = content.bounds
+            stack.autoresizingMask = [.width, .height]
+            content.addSubview(stack)
+        }
     }
 
     /// Shows or hides the panel to match the core's Nudge.
@@ -49,11 +51,11 @@ final class NudgePanel: NSObject {
         }
         guard nudge != shown else { return }
         shown = nudge
-        let committed = assistant.project(nudge.committedProject)?.shortName.uppercased() ?? "?"
+        let committed = nudge.committedProject.flatMap(assistant.project)?.shortName.uppercased() ?? "NO PROJECT"
         let here = nudge.nowProject.flatMap(assistant.project)?.shortName.uppercased() ?? "NO PROJECT"
         heading.attributedStringValue = Theme.label("\(here) ≠ \(committed)", color: Theme.accent)
-        window.stringValue = assistant.menuBar.window ?? ""
-        task.stringValue = assistant.task(nudge.task).map { "Committed: \($0.title)" } ?? ""
+        windowLabel.stringValue = assistant.menuBar.window ?? ""
+        taskLabel.stringValue = assistant.task(nudge.task).map { "Committed: \($0.title)" } ?? ""
         if let screen = NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: screen.maxX - panel.frame.width - 16, y: screen.minY + 16))
         }

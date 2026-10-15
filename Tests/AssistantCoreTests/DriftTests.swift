@@ -98,6 +98,22 @@ import AssistantTestSupport
         #expect(!assistant.isDrifting)
     }
 
+    @Test func aCommittedTaskWithNoProjectDriftsOntoAnyProject() throws {
+        let (assistant, _, other, _) = try committed()
+        assistant.receive(.activeWindow(app: notes, windowTitle: "Landlord"))
+        tick(assistant, minutes: 10)
+        let added = try assistant.addNewTask()
+        #expect(added.project == nil)
+
+        tick(assistant, minutes: 30)
+        #expect(!assistant.isDrifting)
+
+        goOther(assistant)
+        tick(assistant, minutes: 5)
+        #expect(assistant.isDrifting)
+        #expect(assistant.nudge == Nudge(task: added.id, committedProject: nil, nowProject: other.id))
+    }
+
     // MARK: Once per episode
 
     @Test func theNudgeComesOncePerEpisodeAndReArmsOnReturn() throws {
@@ -114,6 +130,34 @@ import AssistantTestSupport
         #expect(!assistant.isDrifting)
         goOther(assistant)
         tick(assistant, minutes: 5)
+        #expect(assistant.nudge != nil)
+    }
+
+    @Test func committingAnotherTaskStartsANewEpisode() throws {
+        let (assistant, _, other, _) = try committed()
+        goOther(assistant)
+        tick(assistant, minutes: 5)
+        assistant.dismissNudge()
+
+        let next = try assistant.addTask(TaskDraft(title: "Back in todo", project: try #require(assistant.projects.first { $0.name == "todo-agent" }).id))
+        try assistant.commitTask(next.id)
+        tick(assistant, minutes: 5)
+
+        #expect(assistant.nudge?.task == next.id)
+        #expect(assistant.nudge?.nowProject == other.id)
+    }
+
+    @Test func comingBackFromAwayStartsANewEpisode() throws {
+        let (assistant, _, _, _) = try committed()
+        goOther(assistant)
+        tick(assistant, minutes: 5)
+        assistant.dismissNudge()
+
+        clock.advance(minutes: 30)
+        assistant.receive(.userIdle(seconds: 30 * 60))
+        assistant.receive(.userIdle(seconds: 0))
+        tick(assistant, minutes: 5)
+
         #expect(assistant.nudge != nil)
     }
 
@@ -190,6 +234,20 @@ import AssistantTestSupport
         #expect(!assistant.decisions.contains(.newTask("Quick")))
     }
 
+    @Test func itsAQuickOneSurvivesAnIdleBreak() throws {
+        let (assistant, _, _, _) = try committed()
+        assistant.receive(.activeWindow(app: notes, windowTitle: "Quick"))
+        tick(assistant, minutes: 10)
+        assistant.dismissNewTask()
+
+        clock.advance(minutes: 20)
+        assistant.receive(.userIdle(seconds: 20 * 60))
+        assistant.receive(.userIdle(seconds: 0))
+        tick(assistant, minutes: 15)
+
+        #expect(!assistant.decisions.contains(.newTask("Quick")))
+    }
+
     @Test func aWindowWithNoTitleIsNamedByItsApp() throws {
         let (assistant, _, _, _) = try committed()
         assistant.receive(.activeWindow(app: notes, windowTitle: nil))
@@ -212,6 +270,17 @@ import AssistantTestSupport
             NowBlock(project: todo.id, committedTask: task.id, start: start, end: start + 20 * 60),
             NowBlock(project: other.id, committedTask: task.id, start: start + 20 * 60, end: start + 30 * 60),
         ])
+    }
+
+    @Test func aBlockEndsWhenInputStoppedNotWhenAwayWasNoticed() throws {
+        let (assistant, todo, _, task) = try committed()
+        let start = clock.now
+        tick(assistant, minutes: 20)
+
+        clock.advance(minutes: 30)
+        assistant.receive(.userIdle(seconds: 30 * 60))
+
+        #expect(try store.load().history == [NowBlock(project: todo.id, committedTask: task.id, start: start, end: start + 20 * 60)])
     }
 
     @Test func closingTheHistoryWritesTheOpenBlock() throws {

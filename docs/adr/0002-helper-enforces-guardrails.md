@@ -13,3 +13,4 @@ Every Operation, whether the helper starts it, Claude Code calls it through an M
 - Every MCP tool that changes state carries a tier, and Ask tools need a pending/confirm/expire flow plus a menu-bar confirm UI.
 - Dara may make Operations stricter, or loosen Ask → Auto for a narrowly scoped case. Never tiers are fixed. Every tier change and every Operation is written to the Operation log.
 - Screen control, when it arrives, runs inside this check: each run is Ask with a stated goal, and each step is still tiered.
+- Now history is written as Now moves, outside the Guardrail and the Operation log: it observes where time went and changes nothing Dara or anyone else could act on.
