@@ -222,6 +222,11 @@ extension SQLiteStore: AssistantStore {
             String(call.inputTokens), String(call.outputTokens), call.contentKind.rawValue, String(call.costUSD))
     }
 
+    public func apiSpend(since: Date) throws -> Double {
+        try rows("SELECT COALESCE(SUM(cost_usd), 0) FROM api_audit WHERE at >= \(since.timeIntervalSinceReferenceDate);",
+                 columns: 1).first.flatMap { Double($0[0]) } ?? 0
+    }
+
     public func record(_ block: NowBlock) throws {
         try execute("INSERT INTO now_history (project_id, task_id, start, end) VALUES (?, ?, ?, ?);",
                     block.project.rawValue.uuidString, block.committedTask?.rawValue.uuidString,

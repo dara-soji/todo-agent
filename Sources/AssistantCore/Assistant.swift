@@ -99,11 +99,15 @@ public final class Assistant {
     var idleSeconds: TimeInterval = 0
     /// Haiku's answers per window: a Project, or nil for none. Kept in memory only.
     var guessCache: [GuessKey: Project.ID?] = [:]
-    var guessInFlight: GuessKey?
+    var guessInFlight: (key: GuessKey, since: Date)?
+    /// Guess keys, oldest first, to keep the cache bounded.
+    var guessOrder: [GuessKey] = []
+    /// When a window whose guess failed may be tried again.
+    var guessRetryAt: [GuessKey: Date] = [:]
     /// The unplaced window being timed for a guess.
     var guessWatch: (key: GuessKey, since: Date)?
-    /// What the Claude API has cost since the helper started, from the audit log.
-    public internal(set) var apiSpendSinceLaunch: Double = 0
+    /// Today's API spend, read from the audit log once a day and added to as calls are made.
+    var apiSpend: (day: Date, today: Double) = (.distantPast, 0)
 
     /// How long a Neutral app or site keeps Now on the last Project.
     static let neutralHoldsFor: TimeInterval = 15 * 60
@@ -141,10 +145,6 @@ public final class Assistant {
             resolve(visit)
         case let .git(repo, branch):
             branches[repo] = branch
-        case let .projectGuess(key, project):
-            guessCache[key] = .some(project)
-            if guessInFlight == key { guessInFlight = nil }
-            resolve(now.visit)
         }
         wakeSnoozedTasks()
         expireDueAsks()
@@ -344,6 +344,7 @@ public final class Assistant {
     private func write(_ change: Change, entries: [LogEntry]) throws {
         try store.write(change, log: entries)
         apply(change)
+        if !change.projects.isEmpty { forgetStaleGuesses() }
         operationLog += entries
         resolve(now.visit)
     }
@@ -478,9 +479,9 @@ public final class Assistant {
         let placed = match != nil || neutral != nil || corrected != nil || isAway
         if !placed, let window { match = guessMatch(for: window) }
 
-        if let match, match.basis != .guess { lastMatched[match.project] = clock.now }
+        if let match, !match.isGuess { lastMatched[match.project] = clock.now }
         // A guess is never confident, so it is never what a Neutral window holds.
-        lastConfident = match?.basis == .guess ? nil : match?.project
+        lastConfident = match?.isGuess == true ? nil : match?.project
         now = Now(visit: visit, match: match, isAway: isAway, neutral: neutral)
         trackGuessWatch(placed: placed)
         trackAfterResolve()

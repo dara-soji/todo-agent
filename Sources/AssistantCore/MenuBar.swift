@@ -61,7 +61,7 @@ public struct MenuBar: Equatable, Sendable {
             marker = .away
             nowDetail = "Away"
             evidence = nil
-        } else if let project, let match = now.match, match.basis == .guess {
+        } else if let project, let match = now.match, match.isGuess {
             title = Self.shorten(project.shortName.uppercased()) + "?"
             marker = .guess
             nowDetail = "\(project.name) · guess"

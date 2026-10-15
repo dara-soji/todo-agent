@@ -26,7 +26,7 @@ extension Assistant {
     /// and the Task it interrupts is marked to resume.
     @discardableResult
     public func quickAdd(_ title: String, start: Bool = false, by startedBy: StartedBy = .dara) throws -> Task {
-        let task = try newTask(TaskDraft(title: title, project: now.project))
+        let task = try newTask(TaskDraft(title: title, project: now.confidentProject))
         guard start else {
             try perform(.addTask, "Added “\(task.title)”", by: startedBy, writing: Change(tasks: [task]))
             return task
@@ -109,7 +109,7 @@ extension Assistant {
     /// The one Task to do after Now, chosen by rule. Suggestions never feed it.
     public var next: Next {
         let open = tasks.filter { $0.status == .open }
-        return NextRule(now: clock.now, calendar: calendar, currentProject: now.project, events: calendarEvents)
+        return NextRule(now: clock.now, calendar: calendar, currentProject: now.confidentProject, events: calendarEvents)
             .choose(from: open)
     }
 
@@ -254,7 +254,7 @@ extension Task {
 
 extension Assistant {
     var guessDecision: [Decision] {
-        guard let match = now.match, match.basis == .guess else { return [] }
+        guard let match = now.match, match.isGuess else { return [] }
         return [.isThis(match.project)]
     }
 }

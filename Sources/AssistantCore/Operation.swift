@@ -149,6 +149,8 @@ public protocol AssistantStore {
     func record(_ block: NowBlock) throws
     /// Appends a line to the API audit log.
     func audit(_ call: APICall) throws
+    /// What the API calls in the audit log since `since` cost.
+    func apiSpend(since: Date) throws -> Double
 }
 
 /// Everything the store holds.

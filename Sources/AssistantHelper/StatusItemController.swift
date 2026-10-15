@@ -18,7 +18,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onAddTask: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
     var claudeCode: ClaudeCodeConnection.State = .starting
-    /// API spend since launch, from the audit log.
+    /// Today's API spend, from the audit log.
     var currentSpend: () -> Double = { 0 }
     /// The latest state, read whenever the dropdown opens: Next can change with time alone.
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
@@ -131,7 +131,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         menu.addItem(action(ClaudeAPIKey.load() == nil ? "Set Claude API key…" : "Replace Claude API key…",
                             #selector(setAPIKey)))
-        menu.addItem(metadata(String(format: "Claude API since launch: $%.4f", currentSpend())))
+        menu.addItem(metadata(String(format: "Claude API today: $%.4f", currentSpend())))
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)

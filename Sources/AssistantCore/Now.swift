@@ -50,6 +50,9 @@ public struct Now: Equatable, Sendable {
             }
         }
 
+        /// Haiku's guess, not something Now is confident of.
+        public var isGuess: Bool { basis == .guess }
+
         /// The meeting a calendar-keyword Matcher fitted.
         public var event: CalendarEvent? {
             if case let .meeting(_, event) = basis { return event }
@@ -73,5 +76,8 @@ public struct Now: Equatable, Sendable {
     public var window: ActiveWindow? { visit?.window }
     public var since: Date? { visit?.since }
     public var project: Project.ID? { match?.project }
+    /// The Project Now is confident of: nil for a guess. Decisions (filing a Task, ranking Next,
+    /// Drift, Now history) use this.
+    public var confidentProject: Project.ID? { match?.isGuess == true ? nil : match?.project }
     public var evidence: Matcher? { match?.evidence }
 }

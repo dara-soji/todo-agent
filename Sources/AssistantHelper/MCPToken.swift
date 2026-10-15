@@ -31,16 +31,3 @@ enum MCPToken {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }
 }
-
-/// The Claude API key, entered once by Dara and kept in the Keychain.
-enum ClaudeAPIKey {
-    private static let item = KeychainItem(account: "claude-api-key")
-
-    static func load() -> String? {
-        (try? item.read()).flatMap { $0?.isEmpty == false ? $0 : nil }
-    }
-
-    static func save(_ key: String) throws {
-        try item.write(key)
-    }
-}

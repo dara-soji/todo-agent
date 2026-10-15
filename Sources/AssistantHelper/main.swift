@@ -34,7 +34,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
             nowMenu: nowMenu, exclusionsMenu: exclusionsMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
-        statusItem.currentSpend = { assistant.apiSpendSinceLaunch }
+        statusItem.currentSpend = { assistant.apiSpendToday }
         statusItem.currentMenuBar = {
             assistant.expireDueAsks()
             return assistant.menuBar
@@ -43,15 +43,14 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 
         let nudgePanel = NudgePanel(assistant: assistant)
         self.nudgePanel = nudgePanel
-        var guessMaker: GuessMaker?
+        let guessMaker = GuessMaker(assistant: assistant)
+        self.guessMaker = guessMaker
         let receive: (Signal) -> Void = { signal in
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
             nudgePanel.update()
-            guessMaker?.check()
+            guessMaker.check()
         }
-        guessMaker = GuessMaker(assistant: assistant, deliver: receive)
-        self.guessMaker = guessMaker
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
         gitWatcher.watch(assistant.repoPathsToWatch)
@@ -61,6 +60,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             nudgePanel.update()
         }
         nudgePanel.onChange = changed
+        guessMaker.onChange = changed
         projectsMenu.onChange = changed
         tasksMenu.onChange = changed
         guardrailsMenu.onChange = changed

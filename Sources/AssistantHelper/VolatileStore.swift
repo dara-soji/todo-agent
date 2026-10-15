@@ -1,4 +1,5 @@
 import AssistantCore
+import Foundation
 
 /// Used only when the SQLite store can't be opened: everything works for this run but isn't kept.
 final class VolatileStore: AssistantStore {
@@ -8,6 +9,10 @@ final class VolatileStore: AssistantStore {
 
     func audit(_ call: APICall) throws {
         snapshot.audit.append(call)
+    }
+
+    func apiSpend(since: Date) throws -> Double {
+        snapshot.audit.filter { $0.at >= since }.reduce(0) { $0 + $1.costUSD }
     }
 
     func record(_ block: NowBlock) throws {

@@ -10,7 +10,7 @@ extension Assistant {
             throw Failure.unknownProject(id)
         }
         // Saying a guessed window is something else forgets the guess for that window.
-        if now.match?.basis == .guess, correction != .project(now.match!.project), let key = guessKey(for: window) {
+        if let guess = now.match, guess.isGuess, correction != .project(guess.project), let key = guessKey(for: window) {
             guessCache[key] = .some(nil)
         }
         self.correction = (window, correction)
