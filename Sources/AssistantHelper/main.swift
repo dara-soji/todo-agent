@@ -19,7 +19,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private let quickAdd = QuickAddPanel()
     private let added = AddedPanel()
     private var nudgePanel: NudgePanel?
-    private var modelWork: ModelWork?
+    private var modelCalls: ModelCalls?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -43,13 +43,13 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
 
         let nudgePanel = NudgePanel(assistant: assistant)
         self.nudgePanel = nudgePanel
-        let modelWork = ModelWork(assistant: assistant)
-        self.modelWork = modelWork
+        let modelCalls = ModelCalls(assistant: assistant)
+        self.modelCalls = modelCalls
         let receive: (Signal) -> Void = { signal in
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
             nudgePanel.update()
-            modelWork.check()
+            modelCalls.check()
         }
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
@@ -60,7 +60,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             nudgePanel.update()
         }
         nudgePanel.onChange = changed
-        modelWork.onChange = changed
+        modelCalls.onChange = changed
         projectsMenu.onChange = changed
         tasksMenu.onChange = changed
         guardrailsMenu.onChange = changed

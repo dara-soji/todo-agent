@@ -1,17 +1,26 @@
 import Foundation
 
-/// What a tie-break sends: the tied Tasks (title, deadline, effort, kind) and the time of day.
+/// Which tie a pick is for: the tied Tasks, what about them was sent, and the part of the day. If any
+/// of that changes, the old pick and its reason no longer apply.
+struct TieKey: Hashable, Sendable {
+    let tasks: Set<Task.ID>
+    let fingerprint: String
+}
+
+/// What a tie-break sends: the tied Tasks' titles, deadlines (in Dara's time), effort and kind, and
+/// the time of day.
 public struct TieBreakRequest: Equatable, Sendable {
     public struct Candidate: Equatable, Sendable {
         /// A distinct name for the model to answer with.
         public let label: String
         public let title: String
-        public let deadline: Date?
+        /// E.g. "Thursday 17:00", in Dara's time zone.
+        public let due: String?
         public let effort: Task.Effort?
         public let kind: Task.Kind?
     }
 
-    let key: Set<Task.ID>
+    let key: TieKey
     let ids: [Task.ID]
     public let candidates: [Candidate]
     /// E.g. "Saturday 04:00".
@@ -28,6 +37,12 @@ public struct TieBreakAnswer: Sendable {
         self.reason = reason
         self.call = call
     }
+}
+
+/// Sonnet's pick for a tie, and the one-line reason shown under Next.
+struct TieBreakPick {
+    let task: Task.ID
+    let reason: String
 }
 
 /// Port: picks one of the tied Tasks with a one-line reason. Throws for anything that isn't an answer.
@@ -54,6 +69,7 @@ public final class TieBreakRunner {
             if let call = answer.call { assistant.recordAPICall(call) }
             assistant.applyTieBreak(request, answer)
         } catch {
+            if let billed = error as? BilledFailure { assistant.recordAPICall(billed.call) }
             assistant.tieBreakFailed(request.key)
         }
     }
@@ -64,6 +80,12 @@ extension Assistant {
     static let tieBreakLimit = 5
     /// The longest reason shown under Next, ellipsis included.
     static let reasonLimit = 80
+    /// A tie-break still in flight after this long is given up on.
+    static let tieBreakGivesUpAfter: TimeInterval = 2 * 60
+    /// After a failure (or a non-answer), the same tie is asked about again no sooner than this.
+    static let tieBreakRetryAfter: TimeInterval = 10 * 60
+    /// Picks kept in memory; beyond this they are all dropped and asked for again as ties come up.
+    static let tieBreakCacheLimit = 100
 
     /// The tied Tasks at the top of Next right now, if any.
     func currentTie() -> [Task]? {
@@ -72,44 +94,61 @@ extension Assistant {
 
     /// The tie-break to ask for now, if Next is on a tie not yet broken; taking it marks it in flight.
     func takeTieBreakRequest() -> TieBreakRequest? {
-        if let flight = tieInFlight, clock.now.timeIntervalSince(flight.since) >= Self.guessGivesUpAfter {
+        if let flight = tieInFlight, clock.now.timeIntervalSince(flight.since) >= Self.tieBreakGivesUpAfter {
             tieBreakFailed(flight.key)
         }
+        tieRetryAt = tieRetryAt.filter { $0.value > clock.now }
         guard tieInFlight == nil, let tie = currentTie() else { return nil }
-        let key = Set(tie.map(\.id))
-        guard tieBreaks[key] == nil, (tieRetryAt[key] ?? .distantPast) <= clock.now else { return nil }
+        let key = tieKey(tie)
+        guard tieBreaks[key] == nil, tieRetryAt[key] == nil else { return nil }
         tieInFlight = (key, clock.now)
         let labels = uniqueLabels(tie.map(\.title))
+        return TieBreakRequest(
+            key: key, ids: tie.map(\.id),
+            candidates: zip(labels, tie).map { label, task in
+                TieBreakRequest.Candidate(
+                    label: label, title: task.title, due: task.deadline.map { format($0, "EEEE HH:mm") },
+                    effort: task.effort, kind: task.kind)
+            },
+            timeOfDay: format(clock.now, "EEEE HH:mm"))
+    }
+
+    /// Keeps the model's pick for this tie. An answer that isn't one of the Tasks counts as no answer.
+    func applyTieBreak(_ request: TieBreakRequest, _ answer: TieBreakAnswer) {
+        guard let index = request.candidates.firstIndex(where: { $0.label == answer.choice }) else {
+            return tieBreakFailed(request.key)
+        }
+        if tieInFlight?.key == request.key { tieInFlight = nil }
+        if tieBreaks.count >= Self.tieBreakCacheLimit { tieBreaks.removeAll() }
+        tieBreaks[request.key] = TieBreakPick(task: request.ids[index], reason: Self.oneLine(answer.reason))
+    }
+
+    func tieBreakFailed(_ key: TieKey) {
+        if tieInFlight?.key == key { tieInFlight = nil }
+        tieRetryAt[key] = clock.now + Self.tieBreakRetryAfter
+    }
+
+    /// The model's pick for the current tie, if it has made one.
+    func tieBreakPick() -> TieBreakPick? {
+        guard let tie = currentTie(), let pick = tieBreaks[tieKey(tie)] else { return nil }
+        return pick
+    }
+
+    private func tieKey(_ tie: [Task]) -> TieKey {
+        let details = tie.sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }.map { task in
+            [task.id.rawValue.uuidString, task.title, task.deadline.map { "\($0.timeIntervalSince1970)" } ?? "",
+             task.effort?.rawValue ?? "", task.kind?.rawValue ?? ""].joined(separator: "|")
+        }
+        return TieKey(tasks: Set(tie.map(\.id)), fingerprint: (details + [nextRule().partOfDay]).joined(separator: "\n"))
+    }
+
+    private func format(_ date: Date, _ pattern: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "EEEE HH:mm"
-        return TieBreakRequest(
-            key: key, ids: tie.map(\.id),
-            candidates: zip(labels, tie).map { label, task in
-                TieBreakRequest.Candidate(label: label, title: task.title, deadline: task.deadline, effort: task.effort, kind: task.kind)
-            },
-            timeOfDay: formatter.string(from: clock.now))
-    }
-
-    /// Keeps the model's pick for this tie, if it named one of the Tasks.
-    func applyTieBreak(_ request: TieBreakRequest, _ answer: TieBreakAnswer) {
-        if tieInFlight?.key == request.key { tieInFlight = nil }
-        guard let index = request.candidates.firstIndex(where: { $0.label == answer.choice }) else { return }
-        tieBreaks[request.key] = (request.ids[index], Self.oneLine(answer.reason))
-    }
-
-    func tieBreakFailed(_ key: Set<Task.ID>) {
-        if tieInFlight?.key == key { tieInFlight = nil }
-        tieRetryAt[key] = clock.now + Self.guessRetryAfter
-    }
-
-    /// The model's pick for the current tie, if it has made one.
-    func tieBreakPick() -> (task: Task.ID, reason: String)? {
-        guard let tie = currentTie(), let pick = tieBreaks[Set(tie.map(\.id))], tie.contains(where: { $0.id == pick.task })
-        else { return nil }
-        return pick
+        formatter.dateFormat = pattern
+        return formatter.string(from: date)
     }
 
     private static func oneLine(_ text: String) -> String {

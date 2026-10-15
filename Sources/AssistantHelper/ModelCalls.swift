@@ -4,7 +4,7 @@ import Foundation
 /// Runs the core's model-backed work after each Signal (screenshot guesses and Next tie-breaks)
 /// with the real adapters, one at a time. Without an API key nothing is asked, so rules alone run.
 @MainActor
-final class ModelWork {
+final class ModelCalls {
     private let guesses: GuessRunner
     private let tieBreaks: TieBreakRunner
     private var running = false

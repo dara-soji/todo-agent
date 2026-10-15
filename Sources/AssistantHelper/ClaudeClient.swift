@@ -12,9 +12,12 @@ final class ClaudeClient: ModelClient, TieBreaker {
 
     enum Failure: Error {
         case http(Int, String)
-        /// A refusal, or an answer cut off by max_tokens: no answer to read.
-        case noAnswer(String)
-        case unreadable
+    }
+
+    /// Billed, but no answer: a refusal, a cut-off by max_tokens, or an unreadable reply.
+    struct NoAnswer: BilledFailure {
+        let reason: String
+        let call: APICall
     }
 
     private let apiKey: () -> String?
@@ -57,8 +60,8 @@ final class ClaudeClient: ModelClient, TieBreaker {
         let json = try await post(body, apiKey: key)
         let call = Self.call(json, purpose: .projectGuess, model: Self.guessModel, kind: .screenshotAndProjectNames)
         // Check the stop reason before reading content: Haiku has no server-side fallback.
-        let answer = try Self.answer(json)
-        guard let choice = answer["project"] as? String else { throw Failure.unreadable }
+        let answer = try Self.answer(json, call: call)
+        guard let choice = answer["project"] as? String else { throw NoAnswer(reason: "unreadable", call: call) }
         return ModelAnswer(choice: choice, call: call)
     }
 
@@ -66,17 +69,16 @@ final class ClaudeClient: ModelClient, TieBreaker {
     /// server-side refusal fallback on, as the API recommends for this model.
     func breakTie(_ request: TieBreakRequest) async throws -> TieBreakAnswer {
         guard let key = apiKey() else { throw Failure.http(401, "no_api_key") }
-        let iso = ISO8601DateFormatter()
         let lines = request.candidates.map { candidate in
             var parts = ["\"\(candidate.label)\""]
-            if let deadline = candidate.deadline { parts.append("due \(iso.string(from: deadline))") }
+            if let due = candidate.due { parts.append("due \(due)") }
             if let effort = candidate.effort { parts.append("effort \(effort.rawValue)") }
             if let kind = candidate.kind { parts.append("\(kind.rawValue) work") }
             return "- " + parts.joined(separator: ", ")
         }
         let body: [String: Any] = [
             "model": Self.tieBreakModel,
-            "max_tokens": 4096,
+            "max_tokens": 1024,
             "fallbacks": "default",
             "output_config": [
                 "effort": "low",
@@ -103,9 +105,11 @@ final class ClaudeClient: ModelClient, TieBreaker {
             ]],
         ]
         let json = try await post(body, apiKey: key, betas: ["server-side-fallback-2026-07-01"])
-        let call = Self.call(json, purpose: .nextTieBreak, model: Self.tieBreakModel, kind: .taskTitles)
-        let answer = try Self.answer(json)
-        guard let task = answer["task"] as? String, let reason = answer["reason"] as? String else { throw Failure.unreadable }
+        let call = Self.call(json, purpose: .nextTieBreak, model: Self.tieBreakModel, kind: .taskDetails)
+        let answer = try Self.answer(json, call: call)
+        guard let task = answer["task"] as? String, let reason = answer["reason"] as? String else {
+            throw NoAnswer(reason: "unreadable", call: call)
+        }
         return TieBreakAnswer(choice: task, reason: reason, call: call)
     }
 
@@ -131,22 +135,25 @@ final class ClaudeClient: ModelClient, TieBreaker {
         return json
     }
 
-    /// The audit-log line for a response: metadata only.
-    private static func call(_ json: [String: Any], purpose: APICall.Purpose, model: String, kind: APICall.ContentKind) -> APICall {
+    /// The audit-log line for a response: metadata only. The model is the one that answered, which
+    /// a refusal fallback can change from the one asked.
+    private static func call(_ json: [String: Any], purpose: APICall.Purpose, model asked: String, kind: APICall.ContentKind) -> APICall {
         let usage = json["usage"] as? [String: Any] ?? [:]
-        return APICall(
-            at: Date(), purpose: purpose, model: model,
+        let call = APICall(
+            at: Date(), purpose: purpose, model: json["model"] as? String ?? asked,
             inputTokens: usage["input_tokens"] as? Int ?? 0, outputTokens: usage["output_tokens"] as? Int ?? 0,
             contentKind: kind)
+        if !call.isPriced { NSLog("TodoAgent: no price for \(call.model); its cost is metered as $0") }
+        return call
     }
 
     /// The structured answer, once the stop reason says there is one: a refusal or a cut-off is not.
-    private static func answer(_ json: [String: Any]) throws -> [String: Any] {
+    private static func answer(_ json: [String: Any], call: APICall) throws -> [String: Any] {
         let stopReason = json["stop_reason"] as? String ?? ""
-        guard stopReason == "end_turn" else { throw Failure.noAnswer(stopReason) }
+        guard stopReason == "end_turn" else { throw NoAnswer(reason: stopReason, call: call) }
         guard let text = (json["content"] as? [[String: Any]] ?? []).first(where: { $0["type"] as? String == "text" })?["text"] as? String,
               let answer = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
-        else { throw Failure.unreadable }
+        else { throw NoAnswer(reason: "unreadable", call: call) }
         return answer
     }
 }

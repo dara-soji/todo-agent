@@ -31,7 +31,9 @@ public struct APICall: Equatable, Sendable, Codable {
 
     /// What kind of content was sent, never the content itself.
     public enum ContentKind: String, Sendable, Codable {
-        case screenshotAndProjectNames, taskTitles
+        case screenshotAndProjectNames
+        /// Task titles with their deadlines, effort and kind.
+        case taskDetails
     }
 
     public let at: Date
@@ -50,25 +52,22 @@ public struct APICall: Equatable, Sendable, Codable {
         self.contentKind = contentKind
     }
 
-    /// US dollars at the model's list price per million tokens (prompts under 100K).
+    /// US dollars at the model's list price per million tokens (prompts under 100K); 0 for a model
+    /// the table doesn't know (see `isPriced`).
     public var costUSD: Double {
         guard let price = Self.pricePerMillion[model] else { return 0 }
         return (Double(inputTokens) * price.input + Double(outputTokens) * price.output) / 1_000_000
     }
 
+    /// Whether `costUSD` is real: a refusal fallback can answer from a model not in the table.
+    public var isPriced: Bool { Self.pricePerMillion[model] != nil }
+
     static let pricePerMillion: [String: (input: Double, output: Double)] = [
         "claude-haiku-5-5": (0.10, 0.50),
         "claude-sonnet-5-5": (2.00, 10.00),
+        "claude-opus-5-5": (4.00, 20.00),
+        "claude-fable-5-1": (10.00, 50.00),
     ]
-}
-
-/// Names made distinct for a model to choose among: repeats are numbered "Name (2)", "Name (3)".
-func uniqueLabels(_ names: [String]) -> [String] {
-    var seen: [String: Int] = [:]
-    return names.map { name in
-        seen[name, default: 0] += 1
-        return seen[name]! == 1 ? name : "\(name) (\(seen[name]!))"
-    }
 }
 
 /// Port: one screenshot of the window a guess is for, as PNG data in memory. The helper's adapter
@@ -83,6 +82,12 @@ public protocol ScreenshotCapturer: AnyObject {
 @MainActor
 public protocol ModelClient: AnyObject {
     func chooseProject(screenshot: Data, choices: [String], none: String) async throws -> ModelAnswer
+}
+
+/// A failed call that was still billed (a refusal, a cut-off or an unreadable answer): the runners
+/// write its call to the audit log even though there is no answer.
+public protocol BilledFailure: Error {
+    var call: APICall { get }
 }
 
 public struct ModelAnswer: Sendable {
@@ -125,6 +130,7 @@ public final class GuessRunner {
             let project = zip(labels, request.projects).first { $0.0 == answer.choice }?.1.id
             assistant.applyGuess(request.key, project: project)
         } catch {
+            if let billed = error as? BilledFailure { assistant.recordAPICall(billed.call) }
             assistant.guessFailed(request.key)
         }
     }

@@ -110,8 +110,8 @@ extension Assistant {
     public var next: Next {
         let ruled = nextRule().choose(from: tasks.filter { $0.status == .open })
         // Among Tasks the rule scored the same, Sonnet's pick and reason, once it has answered.
-        if let pick = tieBreakPick() {
-            return .task(pick.task, reason: .chosen(pick.reason), wontFitBefore: ruled.wontFitBefore)
+        if let pick = tieBreakPick(), let task = task(pick.task) {
+            return .task(pick.task, reason: .chosen(pick.reason), wontFitBefore: nextRule().wontFitBefore(task))
         }
         return ruled
     }

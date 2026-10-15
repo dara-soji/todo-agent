@@ -105,9 +105,9 @@ public final class Assistant {
     /// When a window whose guess failed may be tried again.
     var guessRetryAt: [GuessKey: Date] = [:]
     /// Sonnet's picks per tied set of Tasks, with the reason to show.
-    var tieBreaks: [Set<Task.ID>: (task: Task.ID, reason: String)] = [:]
-    var tieInFlight: (key: Set<Task.ID>, since: Date)?
-    var tieRetryAt: [Set<Task.ID>: Date] = [:]
+    var tieBreaks: [TieKey: TieBreakPick] = [:]
+    var tieInFlight: (key: TieKey, since: Date)?
+    var tieRetryAt: [TieKey: Date] = [:]
     /// The unplaced window being timed for a guess.
     var guessWatch: (key: GuessKey, since: Date)?
     /// Today's API spend, read from the audit log once a day and added to as calls are made.
