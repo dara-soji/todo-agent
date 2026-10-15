@@ -109,5 +109,5 @@ The local record of every Operation: its tier, who started it, whether it was co
 _Avoid_: audit log (that is the API audit log), history
 
 **Now history**:
-The local record of Now as Project-level time blocks, with no window titles or URLs.
+The local record of Now as Project-level time blocks, each with the Committed Task during it, and no window titles or URLs. It is an observation, not an Operation.
 _Avoid_: timesheet, activity log

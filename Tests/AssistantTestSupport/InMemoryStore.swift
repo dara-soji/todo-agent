@@ -14,6 +14,11 @@ public final class InMemoryStore: AssistantStore {
         snapshot
     }
 
+    public func record(_ block: NowBlock) throws {
+        if failWrites { throw WriteFailed() }
+        snapshot.history.append(block)
+    }
+
     public func write(_ change: Change, log entries: [LogEntry]) throws {
         if failWrites { throw WriteFailed() }
         snapshot.apply(change)

@@ -52,6 +52,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             break
         }
         title.append(NSAttributedString(string: menuBar.title, attributes: text))
+        if menuBar.drifting {
+            title.append(NSAttributedString(string: " ▲", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(9)]))
+        }
         if menuBar.decisionsWaiting {
             title.append(NSAttributedString(string: " ●", attributes: [.foregroundColor: Theme.accent, .font: Theme.mono(9)]))
         }

@@ -135,6 +135,8 @@ public struct LogEntry: Identifiable, Equatable, Sendable, Codable {
 public protocol AssistantStore {
     func load() throws -> StoreSnapshot
     func write(_ change: Change, log entries: [LogEntry]) throws
+    /// Appends a closed Now history block.
+    func record(_ block: NowBlock) throws
 }
 
 /// Everything the store holds.
@@ -144,11 +146,13 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var log: [LogEntry]
     public var guardrailRules: [GuardrailRule]
     public var neutrals: [NeutralKey]
+    public var history: [NowBlock]
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], guardrailRules: [GuardrailRule] = [],
-        neutrals: [NeutralKey] = []
+        neutrals: [NeutralKey] = [], history: [NowBlock] = []
     ) {
+        self.history = history
         self.projects = projects
         self.tasks = tasks
         self.log = log

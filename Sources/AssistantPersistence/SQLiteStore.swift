@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 5
+    static let schemaVersion = 6
 
     public let url: URL
     private var db: OpaquePointer?
@@ -96,6 +96,15 @@ public final class SQLiteStore {
                 // Small settings stored whole as JSON, e.g. Dara's tier rules.
                 try run("CREATE TABLE settings (key TEXT PRIMARY KEY, json TEXT NOT NULL);")
             }
+            if stored < 6 {
+                // Project-level time blocks only: no titles or URLs.
+                try run("""
+                    CREATE TABLE now_history (
+                        project_id TEXT NOT NULL, task_id TEXT, start REAL NOT NULL, end REAL NOT NULL
+                    );
+                    CREATE INDEX now_history_start ON now_history (start);
+                    """)
+            }
             try execute("""
                 INSERT INTO meta (key, value) VALUES ('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
@@ -119,13 +128,17 @@ public final class SQLiteStore {
         """
     }
 
-    /// One statement with `?` placeholders bound to `values`.
-    private func execute(_ sql: String, _ values: String...) throws {
+    /// One statement with `?` placeholders bound to `values`; nil binds NULL.
+    private func execute(_ sql: String, _ values: String?...) throws {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw lastError() }
         defer { sqlite3_finalize(statement) }
         for (index, value) in values.enumerated() {
-            sqlite3_bind_text(statement, Int32(index + 1), value, -1, Self.transient)
+            if let value {
+                sqlite3_bind_text(statement, Int32(index + 1), value, -1, Self.transient)
+            } else {
+                sqlite3_bind_null(statement, Int32(index + 1))
+            }
         }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw lastError() }
     }
@@ -172,6 +185,28 @@ extension SQLiteStore: AssistantStore {
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
             guardrailRules: try loadGuardrailRules(),
             neutrals: try loadNeutrals())
+        // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
+    }
+
+    /// Now history from `since` on, oldest first.
+    public func history(since: Date) throws -> [NowBlock] {
+        try rows("""
+            SELECT project_id, COALESCE(task_id, ''), start, end FROM now_history
+            WHERE start >= \(since.timeIntervalSinceReferenceDate) ORDER BY start;
+            """, columns: 4)
+            .compactMap { row in
+                guard let project = UUID(uuidString: row[0]), let start = Double(row[2]), let end = Double(row[3])
+                else { return nil }
+                return NowBlock(
+                    project: Project.ID(project), committedTask: UUID(uuidString: row[1]).map(Task.ID.init),
+                    start: Date(timeIntervalSinceReferenceDate: start), end: Date(timeIntervalSinceReferenceDate: end))
+            }
+    }
+
+    public func record(_ block: NowBlock) throws {
+        try execute("INSERT INTO now_history (project_id, task_id, start, end) VALUES (?, ?, ?, ?);",
+                    block.project.rawValue.uuidString, block.committedTask?.rawValue.uuidString,
+                    String(block.start.timeIntervalSinceReferenceDate), String(block.end.timeIntervalSinceReferenceDate))
     }
 
     private static let neutralsKey = "neutrals"

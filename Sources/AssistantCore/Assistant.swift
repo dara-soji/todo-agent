@@ -80,6 +80,15 @@ public final class Assistant {
     /// When the current run of Neutral windows began.
     private var neutralSince: Date?
 
+    /// The Nudge showing for the current Drift, if any.
+    public internal(set) var nudge: Nudge?
+    var drift = DriftState()
+    var newTaskOffer = NewTaskOffer()
+    /// The Now history block being timed.
+    var openHistoryBlock: OpenBlock?
+    /// Seconds since the last input, from the latest idle Signal.
+    var idleSeconds: TimeInterval = 0
+
     /// How long a Neutral app or site keeps Now on the last Project.
     static let neutralHoldsFor: TimeInterval = 15 * 60
 
@@ -109,6 +118,7 @@ public final class Assistant {
             resolve(now.visit)
         case let .userIdle(seconds):
             let wasIdle = isIdle
+            idleSeconds = seconds
             isIdle = seconds >= Self.awayAfter
             // Coming back starts a fresh stretch on the window.
             let visit = wasIdle && !isIdle ? now.visit.map { Now.Visit(window: $0.window, since: clock.now) } : now.visit
@@ -437,6 +447,12 @@ public final class Assistant {
         if let match { lastMatched[match.project] = clock.now }
         lastConfident = match?.project
         now = Now(visit: visit, match: match, isAway: isAway, neutral: neutral)
+        trackAfterResolve()
+    }
+
+    /// Writes a closed Now history block.
+    func recordHistory(_ block: NowBlock) throws {
+        try store.record(block)
     }
 
     /// `project`, while the run of Neutral is young enough and the Project still active.
