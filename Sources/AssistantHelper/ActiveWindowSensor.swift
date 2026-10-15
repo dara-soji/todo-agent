@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import AssistantCore
+import Carbon.HIToolbox
 
 /// Reads the frontmost app (NSWorkspace, no permission) and its focused window title
 /// (Accessibility) and reports each change as an activeWindow Signal.
@@ -8,6 +9,12 @@ import AssistantCore
 final class ActiveWindowSensor: SignalSource {
     private var deliver: ((Signal) -> Void)?
     private let browser = BrowserURLReader()
+    /// Apps to read nothing from, not even a title. Set before start.
+    var excludesApp: (String) -> Bool = { _ in false }
+    /// Whether any site is Excluded: then a browser whose page can't be read keeps no title.
+    var excludesAnySite: () -> Bool = { false }
+    private var secureInputTimer: Timer?
+    private var secureInputWasOn = false
     /// Bumped on every report, so a slow URL read can't overwrite a newer window.
     private var reportNumber = 0
     private var activationToken: NSObjectProtocol?
@@ -37,7 +44,23 @@ final class ActiveWindowSensor: SignalSource {
             MainActor.assumeIsolated { self?.frontmostChanged(to: app) }
         }
         if !Self.hasAccessibility { waitForAccessibility() }
+        watchSecureInput()
         frontmostChanged(to: NSWorkspace.shared.frontmostApplication)
+    }
+
+    /// Secure input can come on inside a window that is already reported (a password field gaining
+    /// focus), so it is checked every few seconds and the window re-reported when it changes.
+    private func watchSecureInput() {
+        secureInputTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let on = IsSecureEventInputEnabled()
+                if on != self.secureInputWasOn {
+                    self.secureInputWasOn = on
+                    self.report()
+                }
+            }
+        }
     }
 
     /// Titles start flowing as soon as Dara grants Accessibility, without needing an app switch.
@@ -65,16 +88,31 @@ final class ActiveWindowSensor: SignalSource {
         let app = App(
             bundleID: frontmost.bundleIdentifier ?? "pid.\(frontmost.processIdentifier)",
             name: frontmost.localizedName ?? "Unknown")
-        let title = focusedWindowTitle()
-        guard browser.reads(app.bundleID) else {
-            return deliver(.activeWindow(app: app, windowTitle: title))
+        // An Excluded app: nothing about its windows is read at all.
+        if excludesApp(app.bundleID) {
+            return deliver(.activeWindow(app: app, windowTitle: nil, excluded: true))
         }
+        // Secure input is on while a password is being typed, anywhere: read nothing.
+        if IsSecureEventInputEnabled() {
+            return deliver(.activeWindow(app: app, windowTitle: nil, excluded: true))
+        }
+        let isBrowser = BrowserURLReader.browsers.contains(app.bundleID)
+        // A browser whose page can't be read might be on an Excluded site: keep no title then.
+        let unknownPageTitle = isBrowser && excludesAnySite() ? nil : focusedWindowTitle()
+        guard browser.reads(app.bundleID) else {
+            return deliver(.activeWindow(app: app, windowTitle: unknownPageTitle))
+        }
+        let title = focusedWindowTitle()
         // Re-read on every report: switching tabs changes the window title, which triggers one.
         reportNumber += 1
         let number = reportNumber
-        browser.url(ofFrontTabIn: app.bundleID) { [weak self] url in
+        browser.frontTab(in: app.bundleID) { [weak self] tab in
             guard let self, number == reportNumber else { return }
-            deliver(.activeWindow(app: app, windowTitle: title, url: url))
+            switch tab {
+            case let .page(url): deliver(.activeWindow(app: app, windowTitle: title, url: url))
+            case .privateWindow: deliver(.activeWindow(app: app, windowTitle: nil, excluded: true))
+            case .unknown: deliver(.activeWindow(app: app, windowTitle: unknownPageTitle))
+            }
         }
     }
 

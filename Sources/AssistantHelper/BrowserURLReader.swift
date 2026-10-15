@@ -6,12 +6,18 @@ import AppKit
 /// Incognito windows in Chromium browsers are never read. Safari can't say whether a window is
 /// private, so its private windows are left to Exclusions (ticket 10).
 final class BrowserURLReader: @unchecked Sendable {
+    /// What the scripts return for a private-browsing window, which is never read.
+    private static let privateWindowMark = "PRIVATE"
+
+    /// Browsers whose page the assistant may not be able to read (Firefox has no script).
+    static let browsers: Set<String> = Set(scripts.keys).union(["org.mozilla.firefox"])
+
     private static func chromium(_ id: String) -> String {
         """
         with timeout of 2 seconds
             tell application id "\(id)"
                 if (count of windows) is 0 then return ""
-                if mode of front window is "incognito" then return ""
+                if mode of front window is "incognito" then return "\(privateWindowMark)"
                 return URL of active tab of front window
             end tell
         end timeout
@@ -42,23 +48,31 @@ final class BrowserURLReader: @unchecked Sendable {
         Self.scripts[bundleID] != nil
     }
 
-    /// Calls `completion` on the main thread with the front tab's URL, or nil.
-    func url(ofFrontTabIn bundleID: String, completion: @escaping @MainActor @Sendable (URL?) -> Void) {
+    /// What the front tab is: a page, a private-browsing window (never read), or unknown.
+    enum FrontTab: Sendable {
+        case page(URL)
+        case privateWindow
+        case unknown
+    }
+
+    /// Calls `completion` on the main thread with what the front tab is.
+    func frontTab(in bundleID: String, completion: @escaping @MainActor @Sendable (FrontTab) -> Void) {
         queue.async { [self] in
-            let url = read(bundleID)
-            DispatchQueue.main.async { completion(url) }
+            let tab = read(bundleID)
+            DispatchQueue.main.async { completion(tab) }
         }
     }
 
-    private func read(_ bundleID: String) -> URL? {
-        guard let source = Self.scripts[bundleID] else { return nil }
-        if let denied = deniedAt[bundleID], Date().timeIntervalSince(denied) < Self.retryDeniedAfter { return nil }
+    private func read(_ bundleID: String) -> FrontTab {
+        guard let source = Self.scripts[bundleID] else { return .unknown }
+        if let denied = deniedAt[bundleID], Date().timeIntervalSince(denied) < Self.retryDeniedAfter { return .unknown }
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error)
         if let code = error?[NSAppleScript.errorNumber] as? Int, code == Self.notPermitted {
             deniedAt[bundleID] = Date()
         }
-        guard let text = result?.stringValue, !text.isEmpty else { return nil }
-        return URL(string: text)
+        guard let text = result?.stringValue, !text.isEmpty else { return .unknown }
+        if text == Self.privateWindowMark { return .privateWindow }
+        return URL(string: text).map(FrontTab.page) ?? .unknown
     }
 }

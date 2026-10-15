@@ -28,9 +28,10 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let tasksMenu = TasksMenu(assistant: assistant)
         let guardrailsMenu = GuardrailsMenu(assistant: assistant)
         let nowMenu = NowMenu(assistant: assistant)
+        let exclusionsMenu = ExclusionsMenu(assistant: assistant)
         let statusItem = StatusItemController(
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
-            nowMenu: nowMenu, storeProblem: storeProblem)
+            nowMenu: nowMenu, exclusionsMenu: exclusionsMenu, storeProblem: storeProblem)
         self.statusItem = statusItem
         statusItem.currentMenuBar = {
             assistant.expireDueAsks()
@@ -58,19 +59,25 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         tasksMenu.onChange = changed
         guardrailsMenu.onChange = changed
         nowMenu.onChange = changed
+        exclusionsMenu.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
         nudgePanel.onSwitchTask = { [weak self] in self?.openQuickAdd(assistant) }
         startMCPServer(assistant, statusItem: statusItem, changed: changed)
 
+        let idleSensor = IdleSensor()
+        self.idleSensor = idleSensor
+        idleSensor.start(delivering: receive)
+        // Without the store, the exclude list can't be trusted, so nothing is read at all.
+        guard storeProblem == nil else { return }
         _ = ActiveWindowSensor.requestAccessibility()
         let windowSensor = ActiveWindowSensor()
+        windowSensor.excludesApp = { assistant.excludesApp($0) }
+        windowSensor.excludesAnySite = { assistant.excludesAnySite }
         let calendarSensor = CalendarSensor()
-        let idleSensor = IdleSensor()
-        (self.windowSensor, self.calendarSensor, self.idleSensor) = (windowSensor, calendarSensor, idleSensor)
+        (self.windowSensor, self.calendarSensor) = (windowSensor, calendarSensor)
         windowSensor.start(delivering: receive)
         calendarSensor.start(delivering: receive)
-        idleSensor.start(delivering: receive)
     }
 
     /// Quitting ends every conversation, so pending Asks are logged as expired, not run.

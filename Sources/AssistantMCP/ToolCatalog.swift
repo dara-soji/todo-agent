@@ -52,7 +52,7 @@ enum ToolCatalog {
              description: "What Dara is doing now: the Project Now matched and why, the app, and the Committed Task. Window titles and URLs stay on the Mac.",
              input: object([:]),
              output: output(["project": nullableObject, "basis": nullableString, "evidence": nullableString,
-                             "app": nullableString, "since": nullableString, "away": boolean,
+                             "app": nullableString, "since": nullableString, "away": boolean, "excluded": boolean,
                              "committed_task": nullableObject]),
              kind: .read) { assistant, _ in
             let now = assistant.now
@@ -63,6 +63,7 @@ enum ToolCatalog {
                 "app": now.window.map { .string($0.app.name) } ?? .null,
                 "since": now.since.map(Shapes.date) ?? .null,
                 "away": .bool(now.isAway),
+                "excluded": .bool(now.window?.isExcluded == true),
                 "committed_task": assistant.committedTask.map(Shapes.task) ?? .null,
             ]
         },
@@ -210,7 +211,38 @@ enum ToolCatalog {
         taskOperation("skip_task", "Skip an open Task as Next for two hours.", .skipTask) {
             try $0.skipTask($1, by: .claudeCode)
         },
+        exclusionOperation("add_exclusion", "Exclude an app, site, email sender or notes folder: the assistant then reads and sends nothing from it.", .addExclusion) {
+            try $0.exclude($1, by: .claudeCode)
+        },
+        exclusionOperation("remove_exclusion", "Stop excluding something. Asks Dara to confirm in the menu bar.", .removeExclusion) {
+            try $0.removeExclusion($1, by: .claudeCode)
+        },
     ]
+
+    /// A tool that adds or removes one exclusion, named by exactly one of app, site, sender or
+    /// notes_folder. The result says the list changed, never what is on it.
+    private static func exclusionOperation(
+        _ name: String, _ description: String, _ kind: OperationKind,
+        _ operation: @escaping @MainActor (Assistant, Exclusion) throws -> Outcome
+    ) -> Spec {
+        Spec(name: name, description: description,
+             input: object([
+                 "app": ["type": "string", "description": "A bundle id."],
+                 "site": ["type": "string", "description": "A host, optionally with a path, no scheme."],
+                 "sender": ["type": "string", "description": "An email address, or @domain."],
+                 "notes_folder": ["type": "string"],
+             ]),
+             output: operationResult, kind: .operation(kind)) { assistant, args in
+            let given = [
+                try args.string("app").map(Exclusion.app), try args.string("site").map(Exclusion.site),
+                try args.string("sender").map(Exclusion.sender), try args.string("notes_folder").map(Exclusion.notesFolder),
+            ].compactMap { $0 }
+            guard given.count == 1, let exclusion = given.first else {
+                throw ToolError("Give exactly one of app, site, sender or notes_folder.")
+            }
+            return result(assistant, try operation(assistant, exclusion), task: nil)
+        }
+    }
 
     /// A tool that runs one Operation on one Task, named by task_id.
     private static func taskOperation(

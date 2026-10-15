@@ -13,6 +13,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let tasksMenu: TasksMenu
     private let guardrailsMenu: GuardrailsMenu
     private let nowMenu: NowMenu
+    private let exclusionsMenu: ExclusionsMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
@@ -21,9 +22,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
     init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, guardrailsMenu: GuardrailsMenu,
-         nowMenu: NowMenu, storeProblem: String?) {
+         nowMenu: NowMenu, exclusionsMenu: ExclusionsMenu, storeProblem: String?) {
         self.menuBar = menuBar
         self.nowMenu = nowMenu
+        self.exclusionsMenu = exclusionsMenu
         self.projectsMenu = projectsMenu
         self.tasksMenu = tasksMenu
         self.guardrailsMenu = guardrailsMenu
@@ -79,6 +81,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if let window = menuBar.window { menu.addItem(metadata(window)) }
         if let markDone = tasksMenu.markDoneItem() { menu.addItem(markDone) }
         nowMenu.items().forEach(menu.addItem)
+        if let exclude = exclusionsMenu.excludeItem() { menu.addItem(exclude) }
 
         menu.addItem(.separator())
         menu.addItem(header("Next"))
@@ -95,6 +98,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if let deleted = tasksMenu.deletedItem() { menu.addItem(deleted) }
         menu.addItem(projectsMenu.item())
         menu.addItem(guardrailsMenu.item())
+        menu.addItem(exclusionsMenu.listItem())
 
         let permissions = [
             ActiveWindowSensor.hasAccessibility ? nil

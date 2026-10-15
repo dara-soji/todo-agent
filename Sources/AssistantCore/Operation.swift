@@ -27,6 +27,7 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     case declareProject, editProject, archiveProject, restoreProject
     /// Dara marking an app or site as Neutral.
     case markNeutral
+    case addExclusion, removeExclusion
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail
@@ -54,18 +55,19 @@ public struct Guardrail {
     var rules: [GuardrailRule] = []
 
     public static func defaultTier(_ kind: OperationKind) -> Tier {
-        kind == .bulkEditTasks ? .ask : .auto
+        [.bulkEditTasks, .removeExclusion].contains(kind) ? .ask : .auto
     }
 
     /// Dara may tighten anything except changing tiers itself, what the helper does on its own, and
-    /// "Treat as Neutral", which applies straight away.
+    /// "Treat as Neutral" and "Exclude", which apply straight away.
     public static func canTighten(_ kind: OperationKind) -> Bool {
-        ![.changeGuardrail, .wakeTask, .markNeutral].contains(kind)
+        ![.changeGuardrail, .wakeTask, .markNeutral, .addExclusion].contains(kind)
     }
 
-    /// Only an Ask Operation can be loosened, and only to Auto.
+    /// Only an Ask Operation can be loosened, and only to Auto. Removing an exclusion always asks:
+    /// loosening it would let private data out with a single click.
     public static func canLoosen(_ kind: OperationKind) -> Bool {
-        defaultTier(kind) == .ask
+        defaultTier(kind) == .ask && kind != .removeExclusion
     }
 
     /// `projects` holds the Project of each Task or Project the Operation writes (nil for none);
@@ -87,23 +89,31 @@ public struct Guardrail {
     }
 }
 
-/// The Tasks, Projects and tier rules an Operation writes, each in its new state.
+/// Dara's settings, stored whole: tier rules, Neutral apps and sites, and the exclude list.
+public struct Settings: Equatable, Sendable, Codable {
+    public var guardrailRules: [GuardrailRule]
+    public var neutrals: [NeutralKey]
+    public var exclusions: [Exclusion]
+
+    public init(guardrailRules: [GuardrailRule] = [], neutrals: [NeutralKey] = [], exclusions: [Exclusion] = []) {
+        self.guardrailRules = guardrailRules
+        self.neutrals = neutrals
+        self.exclusions = exclusions
+    }
+}
+
+/// The Tasks and Projects an Operation writes, each in its new state, and Dara's settings if it
+/// changes them.
 public struct Change: Equatable, Sendable, Codable {
     public var tasks: [Task]
     public var projects: [Project]
-    /// The whole new set of tier rules, or nil if the Operation leaves them alone.
-    public var guardrailRules: [GuardrailRule]?
-    /// The whole new set of apps and sites Dara made Neutral, or nil if left alone.
-    public var neutrals: [NeutralKey]?
+    /// The whole new settings, or nil if the Operation leaves them alone.
+    public var settings: Settings?
 
-    public init(
-        tasks: [Task] = [], projects: [Project] = [], guardrailRules: [GuardrailRule]? = nil,
-        neutrals: [NeutralKey]? = nil
-    ) {
+    public init(tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil) {
         self.tasks = tasks
         self.projects = projects
-        self.guardrailRules = guardrailRules
-        self.neutrals = neutrals
+        self.settings = settings
     }
 }
 
@@ -144,26 +154,23 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var projects: [Project]
     public var tasks: [Task]
     public var log: [LogEntry]
-    public var guardrailRules: [GuardrailRule]
-    public var neutrals: [NeutralKey]
+    public var settings: Settings
     public var history: [NowBlock]
 
     public init(
-        projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], guardrailRules: [GuardrailRule] = [],
-        neutrals: [NeutralKey] = [], history: [NowBlock] = []
+        projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
+        history: [NowBlock] = []
     ) {
         self.history = history
+        self.settings = settings
         self.projects = projects
         self.tasks = tasks
         self.log = log
-        self.guardrailRules = guardrailRules
-        self.neutrals = neutrals
     }
 
-    /// Writes each changed Task and Project over its old version, and any new rules or Neutrals.
+    /// Writes each changed Task and Project over its old version, and any new settings.
     public mutating func apply(_ change: Change) {
-        if let rules = change.guardrailRules { guardrailRules = rules }
-        if let neutrals = change.neutrals { self.neutrals = neutrals }
+        if let settings = change.settings { self.settings = settings }
         for task in change.tasks {
             if let index = tasks.firstIndex(where: { $0.id == task.id }) { tasks[index] = task } else { tasks.append(task) }
         }
