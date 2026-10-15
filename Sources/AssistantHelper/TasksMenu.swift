@@ -30,6 +30,11 @@ final class TasksMenu: NSObject {
             case let .confirm(id):
                 guard let ask = assistant.asks.first(where: { $0.id == id }) else { return nil }
                 return askItem(ask)
+            case let .alwaysMatch(matcher, project):
+                let name = assistant.project(project)?.shortName.uppercased() ?? "it"
+                return offerItem("Always match \(MatcherText.format(matcher)) to \(name)?")
+            case let .alwaysNeutral(key):
+                return offerItem("Always treat \(NeutralLabel.text(key, window: assistant.now.window)) as Neutral?")
             case let .skippedThreeTimes(id):
                 guard let task = assistant.task(id) else { return nil }
                 let item = NSMenuItem(title: "Skipped 3×: \(task.title)", action: nil, keyEquivalent: "")
@@ -79,6 +84,27 @@ final class TasksMenu: NSObject {
     @objc private func declineAsk(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? Ask.ID else { return }
         Attempt.run("Couldn't decline it", then: onChange) { try assistant.declineAsk(id) }
+    }
+
+    /// An "Always …?" after a correction: Always keeps it, Just this once doesn't.
+    private func offerItem(_ question: String) -> NSMenuItem {
+        let item = NSMenuItem(title: question, action: nil, keyEquivalent: "")
+        item.submenu = NSMenu()
+        for (title, selector) in [("Always", #selector(acceptOffer)), ("Just this once", #selector(dismissOffer))] {
+            let choice = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+            choice.target = self
+            item.submenu?.addItem(choice)
+        }
+        return item
+    }
+
+    @objc private func acceptOffer() {
+        Attempt.run("Couldn't keep it", then: onChange) { try assistant.acceptOffer() }
+    }
+
+    @objc private func dismissOffer() {
+        assistant.dismissOffer()
+        onChange()
     }
 
     func tasksItem() -> NSMenuItem {

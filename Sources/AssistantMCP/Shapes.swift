@@ -43,6 +43,16 @@ enum Shapes {
         }
     }
 
+    /// Why Now is on its Project: matcher, meeting, neutral_hold or correction.
+    static func basis(_ basis: Now.Match.Basis) -> String {
+        switch basis {
+        case .matcher: "matcher"
+        case .meeting: "meeting"
+        case .neutralHold: "neutral_hold"
+        case .correction: "correction"
+        }
+    }
+
     static func project(_ project: Project) -> Value {
         [
             "id": .string(project.id.rawValue.uuidString),
@@ -93,6 +103,9 @@ enum Shapes {
         case let .cannotTighten(kind): "\(kind.rawValue) can't be made stricter."
         case let .cannotLoosen(kind): "\(kind.rawValue) isn't an Ask Operation, so it can't be loosened."
         case .nothingNext: "There is no Next to start."
+        case .noWindow: "There is no window to correct yet."
+        case .noOffer: "Nothing is waiting for Always."
+        case .alreadyNeutral: "That is already Neutral."
         case let .notUndoable(id): "Log entry \(id.rawValue.uuidString) ran nothing, so there is nothing to undo."
         }
     }

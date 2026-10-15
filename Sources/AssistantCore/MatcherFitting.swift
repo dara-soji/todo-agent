@@ -36,9 +36,7 @@ struct MatcherFitting {
             guard let title = window.title else { return false }
             return [path, absolute(path)].contains { title.showsPath($0) }
         case let .urlPrefix(prefix):
-            guard let url = window.url, let host = url.host(percentEncoded: false) else { return false }
-            let port = url.port.map { ":\($0)" } ?? ""
-            let page = withoutWWW(host.lowercased()) + port + url.path(percentEncoded: false)
+            guard let page = page(of: window) else { return false }
             return urlFits(prefix: prefix, page: page)
         case .calendarKeyword:
             return false
@@ -50,6 +48,45 @@ struct MatcherFitting {
         guard case let .calendarKeyword(keyword) = matcher else { return false }
         let pattern = "\\b" + NSRegularExpression.escapedPattern(for: keyword) + "\\b"
         return event.title.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Whether the window is in this Neutral app or site.
+    func fits(_ neutral: NeutralKey, _ window: ActiveWindow) -> Bool {
+        switch neutral {
+        case let .app(bundleID):
+            return window.app.bundleID == bundleID
+        case let .site(prefix):
+            guard let page = page(of: window) else { return false }
+            return urlFits(prefix: withoutWWW(prefix.lowercased()), page: page)
+        }
+    }
+
+    /// The Matcher "Always match" would add for this window: its URL down to two path segments
+    /// (e.g. github.com/you/repo), or else the deepest folder its title shows.
+    func suggestedMatcher(for window: ActiveWindow) -> Matcher? {
+        if let page = page(of: window) {
+            let segments = page.split(separator: "/").prefix(3)
+            return segments.count > 1 ? .urlPrefix(segments.joined(separator: "/")) : nil
+        }
+        let paths = (window.title ?? "").split(whereSeparator: { " []()\"'—|".contains($0) })
+            .map(String.init)
+            .filter { $0.hasPrefix("/") || $0.hasPrefix("~/") }
+        return paths.max(by: { $0.count < $1.count }).flatMap { try? normalised(.repoPath($0)) }
+    }
+
+    /// The Neutral key "Treat as Neutral" would add: the site in a browser, else the app.
+    func suggestedNeutral(for window: ActiveWindow) -> NeutralKey {
+        if let url = window.url, let host = url.host(percentEncoded: false) {
+            return .site(withoutWWW(host.lowercased()))
+        }
+        return .app(window.app.bundleID)
+    }
+
+    /// Host (with port) and decoded path, as URL prefixes are written.
+    private func page(of window: ActiveWindow) -> String? {
+        guard let url = window.url, let host = url.host(percentEncoded: false) else { return nil }
+        let port = url.port.map { ":\($0)" } ?? ""
+        return withoutWWW(host.lowercased()) + port + url.path(percentEncoded: false)
     }
 
     /// A repo path as the file system knows it.

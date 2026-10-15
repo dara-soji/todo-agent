@@ -170,7 +170,17 @@ extension SQLiteStore: AssistantStore {
             projects: try loadProjects(),
             tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
-            guardrailRules: try loadGuardrailRules())
+            guardrailRules: try loadGuardrailRules(),
+            neutrals: try loadNeutrals())
+    }
+
+    private static let neutralsKey = "neutrals"
+
+    /// Dara's Neutral apps and sites. Unreadable, they are logged and skipped: losing one only means
+    /// that app or site counts as no Project again, which is the stricter reading.
+    private func loadNeutrals() throws -> [NeutralKey] {
+        let row = try rows("SELECT key, json FROM settings;", columns: 2).first { $0[0] == Self.neutralsKey }
+        return row.map { readable([NeutralKey].self, [$0]).first ?? [] } ?? []
     }
 
     /// Dara's tier rules. Unlike other rows, unreadable rules fail the whole load: quietly falling
@@ -191,12 +201,8 @@ extension SQLiteStore: AssistantStore {
         try run("BEGIN IMMEDIATE;")
         do {
             for project in change.projects { try upsert(project) }
-            if let rules = change.guardrailRules {
-                try execute("""
-                    INSERT INTO settings (key, json) VALUES (?, ?)
-                    ON CONFLICT(key) DO UPDATE SET json = excluded.json;
-                    """, Self.guardrailKey, try encode(rules))
-            }
+            if let rules = change.guardrailRules { try setting(Self.guardrailKey, try encode(rules)) }
+            if let neutrals = change.neutrals { try setting(Self.neutralsKey, try encode(neutrals)) }
             for task in change.tasks {
                 try execute("""
                     INSERT INTO tasks (id, json) VALUES (?, ?)
@@ -227,6 +233,14 @@ extension SQLiteStore: AssistantStore {
             }
             return Project(id: Project.ID(uuid), name: row[1], shortName: row[2], status: status, matchers: matchers)
         }
+    }
+
+    /// Inside the caller's transaction.
+    private func setting(_ key: String, _ json: String) throws {
+        try execute("""
+            INSERT INTO settings (key, json) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET json = excluded.json;
+            """, key, json)
     }
 
     /// Inside the caller's transaction.

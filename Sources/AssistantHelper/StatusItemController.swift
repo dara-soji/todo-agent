@@ -12,6 +12,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let projectsMenu: ProjectsMenu
     private let tasksMenu: TasksMenu
     private let guardrailsMenu: GuardrailsMenu
+    private let nowMenu: NowMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
@@ -20,8 +21,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var currentMenuBar: () -> MenuBar = { fatalError("set currentMenuBar before the menu opens") }
 
     init(showing menuBar: MenuBar, projectsMenu: ProjectsMenu, tasksMenu: TasksMenu, guardrailsMenu: GuardrailsMenu,
-         storeProblem: String?) {
+         nowMenu: NowMenu, storeProblem: String?) {
         self.menuBar = menuBar
+        self.nowMenu = nowMenu
         self.projectsMenu = projectsMenu
         self.tasksMenu = tasksMenu
         self.guardrailsMenu = guardrailsMenu
@@ -73,6 +75,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if let evidence = menuBar.evidence { menu.addItem(metadata(evidence)) }
         if let window = menuBar.window { menu.addItem(metadata(window)) }
         if let markDone = tasksMenu.markDoneItem() { menu.addItem(markDone) }
+        nowMenu.items().forEach(menu.addItem)
 
         menu.addItem(.separator())
         menu.addItem(header("Next"))

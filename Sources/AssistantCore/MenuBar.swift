@@ -60,7 +60,7 @@ public struct MenuBar: Equatable, Sendable {
             title = Self.shorten(project.shortName.uppercased())
             marker = .project
             nowDetail = project.name
-            evidence = Self.evidence(match, branch: branch)
+            evidence = Self.evidence(match, window: now.window, branch: branch)
         } else {
             title = "NO PROJECT"
             marker = .noProject
@@ -69,11 +69,20 @@ public struct MenuBar: Equatable, Sendable {
         }
     }
 
-    private static func evidence(_ match: Now.Match, branch: String?) -> String {
-        if let event = match.event {
-            return "Matched by “\(match.evidence.pattern)” in \(event.title)"
+    private static func evidence(_ match: Now.Match, window: ActiveWindow?, branch: String?) -> String {
+        switch match.basis {
+        case let .matcher(matcher):
+            return "Matched by \(matcher.pattern)" + (branch.map { " · \($0)" } ?? "")
+        case let .meeting(matcher, event):
+            return "Matched by “\(matcher.pattern)” in \(event.title)"
+        case let .neutralHold(.app(bundleID)):
+            let name = window?.app.bundleID == bundleID ? window?.app.name ?? bundleID : bundleID
+            return "Kept while \(name) is Neutral"
+        case let .neutralHold(.site(site)):
+            return "Kept while \(site) is Neutral"
+        case .correction:
+            return "You said so"
         }
-        return "Matched by \(match.evidence.pattern)" + (branch.map { " · \($0)" } ?? "")
     }
 
     private static func shorten(_ text: String) -> String {
