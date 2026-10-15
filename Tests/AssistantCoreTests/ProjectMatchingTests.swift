@@ -90,9 +90,10 @@ import AssistantTestSupport
         browse(assistant, "https://learn.microsoft.com/en-us/training/modules/csharp-call-methods/")
         #expect(assistant.now.project == dotnet.id)
 
-        // Reference docs match no Matcher; they are Neutral, so Now is only held (see NeutralTests).
+        // Reference docs match no Matcher. They are Neutral, so Now holds the last Project.
         browse(assistant, "https://learn.microsoft.com/en-us/dotnet/api/system.string")
         #expect(assistant.now.evidence == nil)
+        #expect(assistant.now.match?.basis == .neutralHold(.site("learn.microsoft.com")))
     }
 
     @Test func aURLPrefixMatchesWholeSegmentsOnly() throws {

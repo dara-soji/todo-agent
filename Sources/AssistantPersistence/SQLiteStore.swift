@@ -179,17 +179,20 @@ extension SQLiteStore: AssistantStore {
     /// Dara's Neutral apps and sites. Unreadable, they are logged and skipped: losing one only means
     /// that app or site counts as no Project again, which is the stricter reading.
     private func loadNeutrals() throws -> [NeutralKey] {
-        let row = try rows("SELECT key, json FROM settings;", columns: 2).first { $0[0] == Self.neutralsKey }
-        return row.map { readable([NeutralKey].self, [$0]).first ?? [] } ?? []
+        guard let json = try readSetting(Self.neutralsKey) else { return [] }
+        return readable([NeutralKey].self, [[Self.neutralsKey, json]]).first ?? []
+    }
+
+    private func readSetting(_ key: String) throws -> String? {
+        try rows("SELECT key, json FROM settings;", columns: 2).first { $0[0] == key }?[1]
     }
 
     /// Dara's tier rules. Unlike other rows, unreadable rules fail the whole load: quietly falling
     /// back to the defaults would loosen what Dara made stricter (ADR 0002).
     private func loadGuardrailRules() throws -> [GuardrailRule] {
-        guard let row = try rows("SELECT key, json FROM settings;", columns: 2).first(where: { $0[0] == Self.guardrailKey })
-        else { return [] }
+        guard let json = try readSetting(Self.guardrailKey) else { return [] }
         do {
-            return try JSONDecoder().decode([GuardrailRule].self, from: Data(row[1].utf8))
+            return try JSONDecoder().decode([GuardrailRule].self, from: Data(json.utf8))
         } catch {
             throw Failure.sqlite("unreadable Guardrail rules: \(error)")
         }
@@ -201,8 +204,8 @@ extension SQLiteStore: AssistantStore {
         try run("BEGIN IMMEDIATE;")
         do {
             for project in change.projects { try upsert(project) }
-            if let rules = change.guardrailRules { try setting(Self.guardrailKey, try encode(rules)) }
-            if let neutrals = change.neutrals { try setting(Self.neutralsKey, try encode(neutrals)) }
+            if let rules = change.guardrailRules { try writeSetting(Self.guardrailKey, try encode(rules)) }
+            if let neutrals = change.neutrals { try writeSetting(Self.neutralsKey, try encode(neutrals)) }
             for task in change.tasks {
                 try execute("""
                     INSERT INTO tasks (id, json) VALUES (?, ?)
@@ -236,7 +239,7 @@ extension SQLiteStore: AssistantStore {
     }
 
     /// Inside the caller's transaction.
-    private func setting(_ key: String, _ json: String) throws {
+    private func writeSetting(_ key: String, _ json: String) throws {
         try execute("""
             INSERT INTO settings (key, json) VALUES (?, ?)
             ON CONFLICT(key) DO UPDATE SET json = excluded.json;

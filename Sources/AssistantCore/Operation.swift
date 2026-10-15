@@ -57,9 +57,10 @@ public struct Guardrail {
         kind == .bulkEditTasks ? .ask : .auto
     }
 
-    /// Dara may tighten anything except changing tiers itself and what the helper does on its own.
+    /// Dara may tighten anything except changing tiers itself, what the helper does on its own, and
+    /// "Treat as Neutral", which applies straight away.
     public static func canTighten(_ kind: OperationKind) -> Bool {
-        ![.changeGuardrail, .wakeTask].contains(kind)
+        ![.changeGuardrail, .wakeTask, .markNeutral].contains(kind)
     }
 
     /// Only an Ask Operation can be loosened, and only to Auto.

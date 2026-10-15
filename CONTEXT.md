@@ -55,6 +55,13 @@ _Avoid_: rule, mapping, filter
 An app or site used across all work (Terminal outside a repo, chat, search, reference docs). A Neutral Signal leaves Now on the last matched Project for a short while instead of counting as no Project.
 _Avoid_: ignored, generic
 
+**Neutral hold**:
+Now staying on the last Project while the user is in a Neutral app or site, for up to about 15 minutes of Neutral. Any stretch of No Project or Away ends it.
+
+**Correction**:
+The user's "Not this" for the current window: a Project, Neutral, or None. It fixes Now at once and lasts only for that window; an "Always" offered after it is the only way it becomes a Matcher or a Neutral.
+_Avoid_: override, fix
+
 **Committed Task**:
 The Task the user has accepted as what they are doing now, usually by accepting Next. Drift is measured against it.
 _Avoid_: active task, current task

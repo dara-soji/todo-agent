@@ -11,14 +11,14 @@ extension Assistant {
         self.correction = (window, correction)
         switch correction {
         case let .project(id):
-            // No offer when there's no key to match on, or the Project already has it.
-            if let matcher = fitting.suggestedMatcher(for: window), projectsByID[id]?.matchers.contains(matcher) == false {
+            // Nothing to offer when the window shows no URL or path to match on, or the Project has it already.
+            if let matcher = fitting.proposedMatcher(for: window), projectsByID[id]?.matchers.contains(matcher) == false {
                 offer = .alwaysMatch(matcher, id)
             } else {
                 offer = nil
             }
         case .neutral:
-            offer = .alwaysNeutral(fitting.suggestedNeutral(for: window))
+            offer = isNeutral(window) ? nil : .alwaysNeutral(fitting.proposedNeutral(for: window))
         case .none:
             offer = nil
         }
@@ -26,14 +26,18 @@ extension Assistant {
     }
 
     /// Always: adds the offered Matcher to its Project, or makes the offered app or site Neutral.
+    /// The correction then gives way to what was kept. If keeping fails, the offer stays.
     @discardableResult
     public func acceptOffer() throws -> Outcome {
         guard let offer else { throw Failure.noOffer }
-        self.offer = nil
-        switch offer {
-        case let .alwaysMatch(matcher, project): return try addMatcher(matcher, to: project)
-        case let .alwaysNeutral(key): return try markNeutral(key)
+        let outcome = switch offer {
+        case let .alwaysMatch(matcher, project): try addMatcher(matcher, to: project)
+        case let .alwaysNeutral(key): try markNeutral(key)
         }
+        self.offer = nil
+        correction = nil
+        resolve(now.visit)
+        return outcome
     }
 
     /// Just this once: the correction stands for this window, and nothing is kept.
@@ -41,21 +45,23 @@ extension Assistant {
         offer = nil
     }
 
-    /// "Treat <app/site> as Neutral" for the current window, or nil when it is already Neutral.
-    public var neutralSuggestion: NeutralKey? {
-        guard let window = now.window, now.neutral == nil else { return nil }
-        return fitting.suggestedNeutral(for: window)
+    /// The app or site "Treat as Neutral" would add for the current window, or nil when it is
+    /// Neutral already.
+    public var neutralToOffer: NeutralKey? {
+        guard let window = now.window, !isNeutral(window) else { return nil }
+        return fitting.proposedNeutral(for: window)
     }
 
     /// Makes an app or site Neutral from now on.
     @discardableResult
     public func markNeutral(_ key: NeutralKey, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard !(NeutralKey.defaults + neutrals).contains(key) else { throw Failure.alreadyNeutral(key) }
-        let label = switch key {
-        case let .app(bundleID): bundleID
-        case let .site(site): site
-        }
-        return try perform(.markNeutral, "Treated \(label) as Neutral", by: startedBy,
+        return try perform(.markNeutral, "Treated \(key.label(in: now.window)) as Neutral", by: startedBy,
                            writing: Change(neutrals: neutrals + [key]))
+    }
+
+    /// The "Always …?" waiting after a correction, as a Decision.
+    var offerDecision: [Decision] {
+        offer.map { [.offer($0)] } ?? []
     }
 }

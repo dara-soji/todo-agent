@@ -75,11 +75,8 @@ public struct MenuBar: Equatable, Sendable {
             return "Matched by \(matcher.pattern)" + (branch.map { " · \($0)" } ?? "")
         case let .meeting(matcher, event):
             return "Matched by “\(matcher.pattern)” in \(event.title)"
-        case let .neutralHold(.app(bundleID)):
-            let name = window?.app.bundleID == bundleID ? window?.app.name ?? bundleID : bundleID
-            return "Kept while \(name) is Neutral"
-        case let .neutralHold(.site(site)):
-            return "Kept while \(site) is Neutral"
+        case let .neutralHold(key):
+            return "Kept while \(key.label(in: window)) is Neutral"
         case .correction:
             return "You said so"
         }

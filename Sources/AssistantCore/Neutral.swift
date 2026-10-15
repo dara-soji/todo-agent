@@ -17,6 +17,14 @@ public enum NeutralKey: Hashable, Sendable, Codable {
         .site("developer.apple.com"), .site("learn.microsoft.com"), .site("docs.swift.org"),
         .site("claude.ai"),
     ]
+
+    /// How the menu names it: the app's name when that app is in front, else its bundle id or site.
+    public func label(in window: ActiveWindow?) -> String {
+        switch self {
+        case let .app(bundleID): window?.app.bundleID == bundleID ? window?.app.name ?? bundleID : bundleID
+        case let .site(site): site
+        }
+    }
 }
 
 /// Dara's "Not this" for the current window.

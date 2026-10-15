@@ -15,9 +15,9 @@ final class NowMenu: NSObject {
     func items() -> [NSMenuItem] {
         guard assistant.now.window != nil else { return [] }
         var items = [notThisItem()]
-        if let key = assistant.neutralSuggestion {
+        if let key = assistant.neutralToOffer {
             let treat = NSMenuItem(
-                title: "Treat \(NeutralLabel.text(key, window: assistant.now.window)) as Neutral",
+                title: "Treat \(key.label(in: assistant.now.window)) as Neutral",
                 action: #selector(markNeutral(_:)), keyEquivalent: "")
             treat.target = self
             treat.representedObject = NeutralBox(key: key)
@@ -64,15 +64,5 @@ final class NowMenu: NSObject {
     @objc private func markNeutral(_ sender: NSMenuItem) {
         guard let box = sender.representedObject as? NeutralBox else { return }
         Attempt.run("Couldn't make it Neutral", then: onChange) { try assistant.markNeutral(box.key) }
-    }
-}
-
-/// How a Neutral app or site is named in the menu: the app's name when it is the one in front.
-enum NeutralLabel {
-    static func text(_ key: NeutralKey, window: ActiveWindow?) -> String {
-        switch key {
-        case let .app(bundleID): window?.app.bundleID == bundleID ? window?.app.name ?? bundleID : bundleID
-        case let .site(site): site
-        }
     }
 }

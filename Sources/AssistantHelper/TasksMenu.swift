@@ -30,11 +30,11 @@ final class TasksMenu: NSObject {
             case let .confirm(id):
                 guard let ask = assistant.asks.first(where: { $0.id == id }) else { return nil }
                 return askItem(ask)
-            case let .alwaysMatch(matcher, project):
+            case let .offer(.alwaysMatch(matcher, project)):
                 let name = assistant.project(project)?.shortName.uppercased() ?? "it"
                 return offerItem("Always match \(MatcherText.format(matcher)) to \(name)?")
-            case let .alwaysNeutral(key):
-                return offerItem("Always treat \(NeutralLabel.text(key, window: assistant.now.window)) as Neutral?")
+            case let .offer(.alwaysNeutral(key)):
+                return offerItem("Always treat \(key.label(in: assistant.now.window)) as Neutral?")
             case let .skippedThreeTimes(id):
                 guard let task = assistant.task(id) else { return nil }
                 let item = NSMenuItem(title: "Skipped 3×: \(task.title)", action: nil, keyEquivalent: "")

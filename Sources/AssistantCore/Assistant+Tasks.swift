@@ -251,13 +251,3 @@ extension Task {
         return task
     }
 }
-
-extension Assistant {
-    var offerDecision: [Decision] {
-        switch offer {
-        case let .alwaysMatch(matcher, project)?: [.alwaysMatch(matcher, project)]
-        case let .alwaysNeutral(key)?: [.alwaysNeutral(key)]
-        case nil: []
-        }
-    }
-}

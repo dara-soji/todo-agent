@@ -63,7 +63,7 @@ struct MatcherFitting {
 
     /// The Matcher "Always match" would add for this window: its URL down to two path segments
     /// (e.g. github.com/you/repo), or else the deepest folder its title shows.
-    func suggestedMatcher(for window: ActiveWindow) -> Matcher? {
+    func proposedMatcher(for window: ActiveWindow) -> Matcher? {
         if let page = page(of: window) {
             let segments = page.split(separator: "/").prefix(3)
             return segments.count > 1 ? .urlPrefix(segments.joined(separator: "/")) : nil
@@ -74,10 +74,10 @@ struct MatcherFitting {
         return paths.max(by: { $0.count < $1.count }).flatMap { try? normalised(.repoPath($0)) }
     }
 
-    /// The Neutral key "Treat as Neutral" would add: the site in a browser, else the app.
-    func suggestedNeutral(for window: ActiveWindow) -> NeutralKey {
+    /// The Neutral key "Treat as Neutral" would add: the site (with its port) in a browser, else the app.
+    func proposedNeutral(for window: ActiveWindow) -> NeutralKey {
         if let url = window.url, let host = url.host(percentEncoded: false) {
-            return .site(withoutWWW(host.lowercased()))
+            return .site(withoutWWW(host.lowercased()) + (url.port.map { ":\($0)" } ?? ""))
         }
         return .app(window.app.bundleID)
     }

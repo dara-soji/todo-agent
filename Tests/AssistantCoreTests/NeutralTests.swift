@@ -132,6 +132,55 @@ import AssistantTestSupport
         #expect(assistant.now.match?.basis == .neutralHold(.site("learn.microsoft.com")))
     }
 
+    @Test func theHoldEndsWhenNowGoesToNoProjectInBetween() throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        assistant.receive(.activeWindow(app: slack, windowTitle: "general"))
+        assistant.receive(.activeWindow(app: notes, windowTitle: "Ideas"))  // No Project, not Neutral.
+
+        assistant.receive(.activeWindow(app: slack, windowTitle: "general"))
+
+        #expect(assistant.now.project == nil)
+    }
+
+    @Test func comingBackFromAwayHoldsNothing() throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        assistant.receive(.userIdle(seconds: 30 * 60))
+        assistant.receive(.activeWindow(app: slack, windowTitle: "general"))
+
+        assistant.receive(.userIdle(seconds: 0))
+
+        #expect(assistant.now.project == nil)
+    }
+
+    @Test func aNoneCorrectionLeavesNothingToHold() throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        try assistant.correctNow(.none)
+
+        assistant.receive(.activeWindow(app: slack, windowTitle: "general"))
+
+        #expect(assistant.now.project == nil)
+    }
+
+    @Test func afterAMeetingInZoomTheHoldGetsItsFullTime() throws {
+        let assistant = makeAssistant()
+        let standup = try assistant.declareProject(name: "Standups", matchers: [.calendarKeyword("standup")])
+        assistant.receive(.calendar(events: [
+            CalendarEvent(title: "Team standup", start: clock.now, end: clock.now + 30 * 60),
+        ]))
+        assistant.receive(.activeWindow(app: zoom, windowTitle: "Zoom Meeting"))
+        clock.advance(minutes: 30)  // The meeting ends; still in Zoom.
+        assistant.receive(.userIdle(seconds: 0))
+        #expect(assistant.now.project == standup.id)
+
+        clock.advance(minutes: 14)
+        assistant.receive(.userIdle(seconds: 0))
+
+        #expect(assistant.now.project == standup.id)
+    }
+
     // MARK: Marking Neutral
 
     @Test func daraCanTreatAnAppAsNeutralAndItIsKept() throws {
@@ -139,23 +188,43 @@ import AssistantTestSupport
         let todo = try onTodoAgent(assistant)
         assistant.receive(.activeWindow(app: notes, windowTitle: "Ideas"))
         #expect(assistant.now.project == nil)
-        #expect(assistant.neutralSuggestion == .app("com.apple.Notes"))
+        #expect(assistant.neutralToOffer == .app("com.apple.Notes"))
 
         try assistant.markNeutral(.app("com.apple.Notes"))
 
         #expect(assistant.now.project == todo.id)
-        #expect(assistant.neutralSuggestion == nil)
+        #expect(assistant.neutralToOffer == nil)
         #expect(assistant.operationLog.last?.kind == .markNeutral)
         #expect(makeAssistant().neutrals == [.app("com.apple.Notes")])
+    }
+
+    @Test func aMatchedWindowInANeutralAppIsNotOfferedAsNeutral() throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        assistant.receive(.activeWindow(app: terminal, windowTitle: "dara — ~/code/todo-agent — -zsh"))
+
+        #expect(assistant.neutralToOffer == nil)
+    }
+
+    @Test func aSiteKeepsItsPortSoMarkingItWorks() throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        browse(assistant, "http://localhost:3000/admin")
+        #expect(assistant.neutralToOffer == .site("localhost:3000"))
+
+        try assistant.markNeutral(.site("localhost:3000"))
+
+        #expect(assistant.now.neutral == .site("localhost:3000"))
+        #expect(assistant.neutralToOffer == nil)
     }
 
     @Test func theSuggestionIsTheSiteInABrowserAndNothingWhenAlreadyNeutral() {
         let assistant = makeAssistant()
         browse(assistant, "https://news.ycombinator.com/item?id=1")
-        #expect(assistant.neutralSuggestion == .site("news.ycombinator.com"))
+        #expect(assistant.neutralToOffer == .site("news.ycombinator.com"))
 
         browse(assistant, "https://stackoverflow.com/questions/1")
-        #expect(assistant.neutralSuggestion == nil)
+        #expect(assistant.neutralToOffer == nil)
     }
 
     // MARK: Corrections
@@ -170,7 +239,7 @@ import AssistantTestSupport
         #expect(assistant.now.project == todo.id)
         #expect(assistant.now.match?.basis == .correction)
         #expect(assistant.menuBar.evidence == "You said so")
-        #expect(assistant.decisions == [.alwaysMatch(.urlPrefix("github.com/dara-soji/todo-agent"), todo.id)])
+        #expect(assistant.decisions == [.offer(.alwaysMatch(.urlPrefix("github.com/dara-soji/todo-agent"), todo.id))])
         #expect(assistant.project(todo.id)?.matchers == [])
         #expect(assistant.operationLog.count == 1)
     }
@@ -185,6 +254,7 @@ import AssistantTestSupport
 
         #expect(assistant.decisions.isEmpty)
         #expect(assistant.project(todo.id)?.matchers == [.urlPrefix("github.com/dara-soji/todo-agent")])
+        #expect(assistant.now.match?.basis == .matcher(.urlPrefix("github.com/dara-soji/todo-agent")))
         assistant.receive(.activeWindow(app: code, windowTitle: "elsewhere"))
         browse(assistant, "https://github.com/dara-soji/todo-agent/issues/9")
         #expect(assistant.now.match?.basis == .matcher(.urlPrefix("github.com/dara-soji/todo-agent")))
@@ -208,7 +278,7 @@ import AssistantTestSupport
 
         try assistant.correctNow(.project(todo.id))
 
-        #expect(assistant.decisions == [.alwaysMatch(.repoPath("~/code/todo-agent"), todo.id)])
+        #expect(assistant.decisions == [.offer(.alwaysMatch(.repoPath("~/code/todo-agent"), todo.id))])
     }
 
     @Test func correctingToNeutralHoldsAndOffersToKeepItNeutral() throws {
@@ -220,11 +290,59 @@ import AssistantTestSupport
         try assistant.correctNow(.neutral)
 
         #expect(assistant.now.project == todo.id)
-        #expect(assistant.decisions == [.alwaysNeutral(.site("news.ycombinator.com"))])
+        #expect(assistant.decisions == [.offer(.alwaysNeutral(.site("news.ycombinator.com")))])
 
         assistant.dismissOffer()
         #expect(assistant.decisions.isEmpty)
         #expect(assistant.neutrals.isEmpty)
+    }
+
+    @Test func correctingAMatchedWindowToNeutralHoldsTheProjectBeforeIt() throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        let wrong = try assistant.declareProject(name: "Wrong", matchers: [.urlPrefix("example.com/docs")])
+        browse(assistant, "https://example.com/docs/page")
+        #expect(assistant.now.project == wrong.id)
+
+        try assistant.correctNow(.neutral)
+
+        #expect(assistant.now.project == todo.id)
+        #expect(assistant.decisions == [.offer(.alwaysNeutral(.site("example.com")))])
+    }
+
+    @Test func correctingADefaultNeutralToNeutralOffersNothing() throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        let other = try assistant.declareProject(name: "Other", matchers: [.repoPath("~/code/other")])
+        assistant.receive(.activeWindow(app: terminal, windowTitle: "dara — ~/code/other — -zsh"))
+        #expect(assistant.now.project == other.id)
+
+        try assistant.correctNow(.neutral)
+
+        #expect(assistant.decisions.isEmpty)
+    }
+
+    @Test func anOfferEndsWithItsWindow() throws {
+        let assistant = makeAssistant()
+        let todo = try assistant.declareProject(name: "todo-agent", matchers: [])
+        browse(assistant, "https://github.com/dara-soji/todo-agent/pulls")
+        try assistant.correctNow(.project(todo.id))
+
+        assistant.receive(.activeWindow(app: notes, windowTitle: "Ideas"))
+
+        #expect(assistant.decisions.isEmpty)
+    }
+
+    @Test func aFailedAlwaysKeepsTheOffer() throws {
+        let assistant = makeAssistant()
+        let todo = try assistant.declareProject(name: "todo-agent", matchers: [])
+        browse(assistant, "https://github.com/dara-soji/todo-agent/pulls")
+        try assistant.correctNow(.project(todo.id))
+        store.failWrites = true
+
+        #expect(throws: InMemoryStore.WriteFailed.self) { try assistant.acceptOffer() }
+
+        #expect(assistant.decisions.count == 1)
     }
 
     @Test func correctingToNoneLeavesNoProjectAndOffersNothing() throws {

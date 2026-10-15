@@ -71,9 +71,12 @@ public final class Assistant {
     var correction: (window: ActiveWindow, to: Correction)?
     /// The "Always …?" waiting after a correction.
     var offer: CorrectionOffer?
-    /// The last Project Now was confidently on (a Matcher, a meeting or a correction): what a
-    /// Neutral window holds.
+    /// The Project Now was last on, cleared by any stretch of No Project or Away: what a Neutral
+    /// window holds.
     private var lastConfident: Project.ID?
+    /// `lastConfident` as it was before the current window, for "Not this → Neutral" on a window
+    /// that had matched the wrong Project.
+    private var confidentBeforeWindow: Project.ID?
     /// When the current run of Neutral windows began.
     private var neutralSince: Date?
 
@@ -390,22 +393,25 @@ public final class Assistant {
 
     /// Settles Now. In order: Away has no Project; a meeting decides while Dara sits still; Dara's
     /// correction for this window; a Matcher on the foreground window; a meeting under way; and,
-    /// in a Neutral app or site, the last confident Project for up to `neutralHoldsFor`.
+    /// in a Neutral app or site, the last Project for up to `neutralHoldsFor` of Neutral.
     func resolve(_ visit: Now.Visit?) {
         let window = visit?.window
-        // A correction is for the window it was made on; any other window ends it.
-        if let correction, correction.window != window { self.correction = nil }
-        let corrected = window.flatMap { window in correction?.window == window ? correction?.to : nil }
+        if window != now.window { confidentBeforeWindow = lastConfident }
+        // A correction, and its offer, are for the window they were made on; any other window ends them.
+        if let correction, correction.window != window {
+            self.correction = nil
+            offer = nil
+        }
+        let corrected = correction?.to
         let meeting = meetingMatch()
         let isAway = isIdle && meeting == nil
         let foreground = corrected == nil ? window.flatMap(foregroundMatch) : nil
         let neutral: NeutralKey? = window.flatMap { window in
-            if corrected == .neutral { return fitting.suggestedNeutral(for: window) }
+            if corrected == .neutral { return fitting.proposedNeutral(for: window) }
             return corrected == nil && foreground == nil ? neutralKey(for: window) : nil
         }
-        neutralSince = neutral == nil || isAway ? nil : neutralSince ?? clock.now
 
-        let match: Now.Match? = if isAway {
+        let confident: Now.Match? = if isAway {
             nil
         } else if isIdle {
             meeting
@@ -414,23 +420,36 @@ public final class Assistant {
         } else if corrected == Correction.none {
             nil
         } else {
-            foreground ?? meeting ?? neutral.flatMap(hold)
+            foreground ?? meeting
+        }
+        var match = confident
+        // The hold's clock runs only while the hold is what decides Now.
+        if confident == nil, !isAway, !isIdle, corrected != Correction.none, let neutral {
+            neutralSince = neutralSince ?? clock.now
+            // A window corrected to Neutral had matched the wrong Project, so it holds the one from
+            // before it; a window just made Neutral holds that too until it has held anything.
+            let from = corrected == .neutral ? confidentBeforeWindow : lastConfident ?? confidentBeforeWindow
+            match = from.flatMap { hold(neutral, keeping: $0) }
+        } else {
+            neutralSince = nil
         }
 
-        if let match {
-            // A hold's Project is already the last confident one, so every match can set it.
-            lastMatched[match.project] = clock.now
-            lastConfident = match.project
-        }
+        if let match { lastMatched[match.project] = clock.now }
+        lastConfident = match?.project
         now = Now(visit: visit, match: match, isAway: isAway, neutral: neutral)
     }
 
-    /// The last confident Project, while the run of Neutral windows is young enough.
-    private func hold(_ neutral: NeutralKey) -> Now.Match? {
-        guard let lastConfident, let since = neutralSince, clock.now.timeIntervalSince(since) < Self.neutralHoldsFor,
-              projectsByID[lastConfident]?.status == .active
+    /// `project`, while the run of Neutral is young enough and the Project still active.
+    private func hold(_ neutral: NeutralKey, keeping project: Project.ID) -> Now.Match? {
+        guard let since = neutralSince, clock.now.timeIntervalSince(since) < Self.neutralHoldsFor,
+              projectsByID[project]?.status == .active
         else { return nil }
-        return Now.Match(project: lastConfident, basis: .neutralHold(neutral))
+        return Now.Match(project: project, basis: .neutralHold(neutral))
+    }
+
+    /// Whether the window is in any Neutral app or site, Matcher or not.
+    func isNeutral(_ window: ActiveWindow) -> Bool {
+        neutralKey(for: window) != nil
     }
 
     /// The Neutral app or site the window is in, from the defaults and Dara's own.
