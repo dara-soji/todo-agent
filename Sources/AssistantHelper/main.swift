@@ -18,6 +18,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var mcpServer: AssistantMCPServer?
     private let quickAdd = QuickAddPanel()
     private let added = AddedPanel()
+    private var nudgePanel: NudgePanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -37,9 +38,12 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
         StatusItemController.registerLoginItemOnFirstLaunch()
 
+        let nudgePanel = NudgePanel(assistant: assistant)
+        self.nudgePanel = nudgePanel
         let receive: (Signal) -> Void = { signal in
             assistant.receive(signal)
             statusItem.render(assistant.menuBar)
+            nudgePanel.update()
         }
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
@@ -47,13 +51,16 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let changed = {
             gitWatcher.watch(assistant.repoPathsToWatch)
             statusItem.render(assistant.menuBar)
+            nudgePanel.update()
         }
+        nudgePanel.onChange = changed
         projectsMenu.onChange = changed
         tasksMenu.onChange = changed
         guardrailsMenu.onChange = changed
         nowMenu.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
+        nudgePanel.onSwitchTask = { [weak self] in self?.openQuickAdd(assistant) }
         startMCPServer(assistant, statusItem: statusItem, changed: changed)
 
         _ = ActiveWindowSensor.requestAccessibility()
@@ -69,6 +76,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     /// Quitting ends every conversation, so pending Asks are logged as expired, not run.
     func applicationWillTerminate(_ notification: Notification) {
         assistant?.expireAllAsks()
+        assistant?.closeNowHistory()
     }
 
     /// The local MCP server Claude Code talks to. If it can't start, the menu says why and

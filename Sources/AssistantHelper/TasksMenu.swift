@@ -33,6 +33,15 @@ final class TasksMenu: NSObject {
             case let .offer(.alwaysMatch(matcher, project)):
                 let name = assistant.project(project)?.shortName.uppercased() ?? "it"
                 return offerItem("Always match \(MatcherText.format(matcher)) to \(name)?")
+            case let .newTask(title):
+                let item = NSMenuItem(title: "New task: \(title)?", action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                for (label, selector) in [("Add", #selector(addNewTask)), ("It's a quick one", #selector(dismissNewTask))] {
+                    let choice = NSMenuItem(title: label, action: selector, keyEquivalent: "")
+                    choice.target = self
+                    item.submenu?.addItem(choice)
+                }
+                return item
             case let .offer(.alwaysNeutral(key)):
                 return offerItem("Always treat \(key.label(in: assistant.now.window)) as Neutral?")
             case let .skippedThreeTimes(id):
@@ -96,6 +105,15 @@ final class TasksMenu: NSObject {
             item.submenu?.addItem(choice)
         }
         return item
+    }
+
+    @objc private func addNewTask() {
+        Attempt.run("Couldn't add the Task", then: onChange) { try assistant.addNewTask() }
+    }
+
+    @objc private func dismissNewTask() {
+        assistant.dismissNewTask()
+        onChange()
     }
 
     @objc private func acceptOffer() {

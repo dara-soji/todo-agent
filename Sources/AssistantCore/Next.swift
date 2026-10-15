@@ -35,6 +35,8 @@ public enum Decision: Equatable, Sendable {
     case confirm(Ask.ID)
     /// After "Not this": make it stick? Always / Just this once.
     case offer(CorrectionOffer)
+    /// Long on No Project: "New task: <title>?" Add / It's a quick one.
+    case newTask(String)
     /// Skipped three times: Snooze till tomorrow, Drop it, or Keep it.
     case skippedThreeTimes(Task.ID)
 }

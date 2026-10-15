@@ -30,12 +30,15 @@ public struct MenuBar: Equatable, Sendable {
     public let nextReason: String?
     /// Decisions are waiting in the dropdown: the menu-bar item shows an amber ●.
     public let decisionsWaiting: Bool
+    /// Drifting off the Committed Task's Project: the menu-bar item shows an amber ▲.
+    public let drifting: Bool
 
     /// Longest menu-bar title, ellipsis included.
     static let titleLimit = 15
 
-    init(_ now: Now, project: Project?, branch: String?, committedTask: Task?, next: NextLine, decisionsWaiting: Bool) {
+    init(_ now: Now, project: Project?, branch: String?, committedTask: Task?, next: NextLine, decisionsWaiting: Bool, drifting: Bool) {
         self.decisionsWaiting = decisionsWaiting
+        self.drifting = drifting
         self.committedTaskTitle = committedTask?.title
         self.nextTitle = next.title
         self.nextReason = next.reason
@@ -136,6 +139,6 @@ extension Assistant {
             now, project: now.project.flatMap(project), branch: now.evidence.flatMap(branch(of:)),
             committedTask: committedTask,
             next: NextLine(next, task: next.task.flatMap(task), project: project, now: clock.now, calendar: calendar),
-            decisionsWaiting: !decisions.isEmpty)
+            decisionsWaiting: !decisions.isEmpty, drifting: isDrifting)
     }
 }
