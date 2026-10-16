@@ -31,10 +31,14 @@ extension Assistant {
         let address = Self.address(in: sender)
         return exclusions.contains { exclusion in
             guard case let .sender(excluded) = exclusion else { return false }
-            guard excluded.hasPrefix("@") else { return address == excluded }
-            let domain = excluded.dropFirst()
-            return address.hasSuffix(excluded) || address.hasSuffix("." + domain)
+            return Self.address(address, matches: excluded)
         }
+    }
+
+    /// An address against "you@x.example", or "@x.example" for x.example and its subdomains.
+    static func address(_ address: String, matches pattern: String) -> Bool {
+        guard pattern.hasPrefix("@") else { return address == pattern }
+        return address.hasSuffix(pattern) || address.hasSuffix("." + pattern.dropFirst())
     }
 
     public func isExcluded(notesFolder: String) -> Bool {

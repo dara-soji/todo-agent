@@ -27,13 +27,27 @@ public struct EmailMessage: Equatable, Sendable {
     }
 }
 
+/// One email Dara sent: only who it went to, and when. Recent recipients are VIPs.
+public struct SentMail: Equatable, Sendable {
+    /// To and Cc, as written, e.g. "Alex <alex@friend.example>".
+    public let to: [String]
+    public let at: Date
+
+    public init(to: [String], at: Date) {
+        self.to = to
+        self.at = at
+    }
+}
+
 /// New mail since a cursor, and the cursor to resume from once it has all been handled.
 public struct MailBatch: Sendable {
     public let messages: [EmailMessage]
+    public let sent: [SentMail]
     public let cursor: String
 
-    public init(messages: [EmailMessage], cursor: String) {
+    public init(messages: [EmailMessage], sent: [SentMail] = [], cursor: String) {
         self.messages = messages
+        self.sent = sent
         self.cursor = cursor
     }
 }
@@ -45,6 +59,14 @@ public protocol MailSource: AnyObject {
     func fetchNew(after cursor: String?) async throws -> MailBatch
     /// One message's plain-text body, attachments left out. Asked for only for mail Triage sends.
     func plainText(of message: EmailMessage) async throws -> String
+    /// Which of these threads still have unread mail; the rest Dara has read in Gmail.
+    func unreadThreads(among threadIDs: [String]) async throws -> Set<String>
+}
+
+/// Port: a macOS notification. Only for a VIP's Action due today or tomorrow.
+@MainActor
+public protocol Notifier: AnyObject {
+    func notify(title: String, body: String)
 }
 
 /// How Triage sorts an email.
@@ -54,6 +76,18 @@ public enum EmailTier: String, Sendable, Codable, CaseIterable {
     /// For the Digest (ticket 14).
     case worthKnowing
     case noise
+}
+
+/// A Worth-knowing email as the Digest shows it: who, what and why, never the body. One per thread.
+public struct DigestLine: Equatable, Sendable, Codable {
+    public let threadID: String
+    public let from: String
+    public let subject: String
+    public let reason: String
+    public let backLink: String
+    public let receivedAt: Date
+    /// Read in Gmail, past its day, promoted, or overtaken by a Suggestion: the store drops it.
+    public var cleared: Bool
 }
 
 /// Everything Haiku sees of one email.
@@ -128,15 +162,17 @@ public final class TriageRunner {
     private let assistant: Assistant
     private let mail: MailSource
     private let triager: EmailTriager
+    private let notifier: Notifier?
     private var running = false
     /// Message ids already sorted this run of the helper, so a retried batch skips them.
     private var sorted: Set<String> = []
     static let sortedLimit = 5_000
 
-    public init(assistant: Assistant, mail: MailSource, triager: EmailTriager) {
+    public init(assistant: Assistant, mail: MailSource, triager: EmailTriager, notifier: Notifier? = nil) {
         self.assistant = assistant
         self.mail = mail
         self.triager = triager
+        self.notifier = notifier
     }
 
     public func run() async {
@@ -144,12 +180,15 @@ public final class TriageRunner {
         running = true
         defer { running = false }
         assistant.expireSuggestions()
+        assistant.expireDigest()
         let batch: MailBatch
         do {
             batch = try await mail.fetchNew(after: assistant.mailCursor)
         } catch {
             return NSLog("TodoAgent: mail fetch failed: \(type(of: error))")
         }
+        // Recipients first, so someone Dara just wrote to is already a VIP for this batch.
+        assistant.recordRecipients(batch.sent)
         var handledAll = true
         for message in batch.messages {
             // Checked as each email comes up: the exclude list can change mid-batch.
@@ -163,7 +202,17 @@ public final class TriageRunner {
                     receivedAt: message.receivedAt)
                 let answer = try await triager.triage(input)
                 if let call = answer.call { assistant.recordAPICall(call) }
-                if answer.tier == .action { try assistant.suggest(from: message, answer) }
+                switch answer.tier {
+                case .action:
+                    let suggestion = try assistant.suggest(from: message, answer)
+                    if assistant.shouldNotify(suggestion, from: message.from) {
+                        notifier?.notify(title: suggestion.title, body: "\(message.from) · \(message.subject)")
+                    }
+                case .worthKnowing:
+                    try assistant.addToDigest(message, reason: answer.reason)
+                case .noise:
+                    break
+                }
                 remember(message)
             } catch let billed as BilledFailure {
                 assistant.recordAPICall(billed.call)
@@ -173,6 +222,14 @@ public final class TriageRunner {
             }
         }
         if handledAll { assistant.advanceMailCursor(to: batch.cursor) }
+        await clearReadDigestLines()
+    }
+
+    /// Lines whose thread Dara has since read in Gmail leave the Digest.
+    private func clearReadDigestLines() async {
+        let threads = assistant.digestThreads
+        guard !threads.isEmpty, let unread = try? await mail.unreadThreads(among: threads) else { return }
+        assistant.clearDigest(threads.filter { !unread.contains($0) })
     }
 }
 
@@ -198,14 +255,15 @@ extension Assistant {
             .sorted { $0.created < $1.created }
     }
 
-    /// Whether Haiku should see this email: inbox mail Dara didn't send, not bulk by rule, not from
-    /// an Excluded sender, on a thread with no Suggestion yet.
+    /// Whether Haiku should see this email: inbox mail Dara didn't send, not from an Excluded sender,
+    /// on a thread with no Suggestion yet, and not bulk by rule unless it is from a VIP.
     func needsTriage(_ message: EmailMessage) -> Bool {
         let labels = Set(message.labels)
-        guard labels.contains("INBOX"), !labels.contains("SENT"), labels.isDisjoint(with: Self.bulkCategories),
-              !message.hasListUnsubscribe, !Self.isNoReply(message.from), !isExcluded(sender: message.from)
+        guard labels.contains("INBOX"), !labels.contains("SENT"), !isExcluded(sender: message.from),
+              suggestionsByThread[message.threadID] == nil
         else { return false }
-        return suggestionsByThread[message.threadID] == nil
+        let bulk = !labels.isDisjoint(with: Self.bulkCategories) || message.hasListUnsubscribe || Self.isNoReply(message.from)
+        return !bulk || isVIP(sender: message.from)
     }
 
     /// no-reply@, noreply@, donotreply@, do-not-reply@ and the like.
@@ -215,8 +273,10 @@ extension Assistant {
         return squashed.contains("noreply") || squashed.contains("donotreply")
     }
 
-    /// Makes the Action email's Suggestion. `needsTriage` has already checked its thread has none.
-    func suggest(from message: EmailMessage, _ answer: TriageAnswer) throws {
+    /// Makes the Action email's Suggestion, and clears its thread's Digest line. `needsTriage` has
+    /// already checked its thread has no Suggestion.
+    @discardableResult
+    func suggest(from message: EmailMessage, _ answer: TriageAnswer) throws -> Suggestion {
         let summary = answer.summary.split(whereSeparator: \.isNewline).first
             .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
         let title = summary.isEmpty ? message.subject : summary
@@ -225,7 +285,8 @@ extension Assistant {
             title: title.count <= Self.suggestionTitleLimit ? title : title.prefix(Self.suggestionTitleLimit - 1) + "…",
             reason: answer.reason, source: .email, backLink: Self.gmailLink(message.threadID),
             guessedDeadline: answer.deadline, created: clock.now, status: .open)
-        try writeUnlogged(Change(suggestions: [suggestion]))
+        try writeUnlogged(Change(suggestions: [suggestion], digest: clearing([message.threadID])))
+        return suggestion
     }
 
     static func gmailLink(_ threadID: String) -> String {

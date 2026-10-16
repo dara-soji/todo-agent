@@ -30,6 +30,9 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     case addExclusion, removeExclusion
     /// Dara answering a Suggestion: accepting makes it a Task; dismissing drops it.
     case acceptSuggestion, dismissSuggestion
+    /// Dara turning a Digest line into a Suggestion.
+    case promoteDigestLine
+    case addVIP, removeVIP
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail
@@ -91,16 +94,31 @@ public struct Guardrail {
     }
 }
 
-/// Dara's settings, stored whole: tier rules, Neutral apps and sites, and the exclude list.
+/// Dara's settings, stored whole: tier rules, Neutral apps and sites, the exclude list and VIPs.
 public struct Settings: Equatable, Sendable, Codable {
     public var guardrailRules: [GuardrailRule]
     public var neutrals: [NeutralKey]
     public var exclusions: [Exclusion]
+    /// Senders whose mail skips the bulk rules: addresses, or "@domain".
+    public var vips: [String]
 
-    public init(guardrailRules: [GuardrailRule] = [], neutrals: [NeutralKey] = [], exclusions: [Exclusion] = []) {
+    public init(
+        guardrailRules: [GuardrailRule] = [], neutrals: [NeutralKey] = [], exclusions: [Exclusion] = [], vips: [String] = []
+    ) {
         self.guardrailRules = guardrailRules
         self.neutrals = neutrals
         self.exclusions = exclusions
+        self.vips = vips
+    }
+
+    /// Settings logged before VIPs existed still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            guardrailRules: try c.decode([GuardrailRule].self, forKey: .guardrailRules),
+            neutrals: try c.decode([NeutralKey].self, forKey: .neutrals),
+            exclusions: try c.decode([Exclusion].self, forKey: .exclusions),
+            vips: try c.decodeIfPresent([String].self, forKey: .vips) ?? [])
     }
 }
 
@@ -114,16 +132,22 @@ public struct Change: Equatable, Sendable, Codable {
     public var suggestions: [Suggestion]
     /// Where Triage has read the mailbox up to, or nil to leave it alone.
     public var mailCursor: String?
+    /// Digest lines, new or cleared.
+    public var digest: [DigestLine]
+    /// Everyone Dara emailed in the last 90 days, whole, or nil to leave it alone.
+    public var recipients: [String: Date]?
 
     public init(
         tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil, suggestions: [Suggestion] = [],
-        mailCursor: String? = nil
+        mailCursor: String? = nil, digest: [DigestLine] = [], recipients: [String: Date]? = nil
     ) {
         self.tasks = tasks
         self.projects = projects
         self.settings = settings
         self.suggestions = suggestions
         self.mailCursor = mailCursor
+        self.digest = digest
+        self.recipients = recipients
     }
 
     /// Log entries stored before Suggestions existed still load.
@@ -134,7 +158,9 @@ public struct Change: Equatable, Sendable, Codable {
             projects: try c.decode([Project].self, forKey: .projects),
             settings: try c.decodeIfPresent(Settings.self, forKey: .settings),
             suggestions: try c.decodeIfPresent([Suggestion].self, forKey: .suggestions) ?? [],
-            mailCursor: try c.decodeIfPresent(String.self, forKey: .mailCursor))
+            mailCursor: try c.decodeIfPresent(String.self, forKey: .mailCursor),
+            digest: try c.decodeIfPresent([DigestLine].self, forKey: .digest) ?? [],
+            recipients: try c.decodeIfPresent([String: Date].self, forKey: .recipients))
     }
 }
 
@@ -185,11 +211,17 @@ public struct StoreSnapshot: Equatable, Sendable {
     /// Every Suggestion, answered or not, so a thread is never suggested twice.
     public var suggestions: [Suggestion]
     public var mailCursor: String?
+    /// Live Digest lines; cleared ones aren't kept.
+    public var digest: [DigestLine]
+    public var recipients: [String: Date]
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
-        history: [NowBlock] = [], audit: [APICall] = [], suggestions: [Suggestion] = [], mailCursor: String? = nil
+        history: [NowBlock] = [], audit: [APICall] = [], suggestions: [Suggestion] = [], mailCursor: String? = nil,
+        digest: [DigestLine] = [], recipients: [String: Date] = [:]
     ) {
+        self.digest = digest
+        self.recipients = recipients
         self.suggestions = suggestions
         self.mailCursor = mailCursor
         self.history = history
@@ -205,6 +237,11 @@ public struct StoreSnapshot: Equatable, Sendable {
     public mutating func apply(_ change: Change) {
         if let settings = change.settings { self.settings = settings }
         if let cursor = change.mailCursor { mailCursor = cursor }
+        if let recipients = change.recipients { self.recipients = recipients }
+        for line in change.digest {
+            digest.removeAll { $0.threadID == line.threadID }
+            if !line.cleared { digest.append(line) }
+        }
         for suggestion in change.suggestions {
             if let index = suggestions.firstIndex(where: { $0.threadID == suggestion.threadID }) {
                 suggestions[index] = suggestion

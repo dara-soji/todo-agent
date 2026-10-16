@@ -96,6 +96,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if let reason = menuBar.nextReason { menu.addItem(metadata(reason)) }
         tasksMenu.nextItems().forEach(menu.addItem)
         if let suggestions = suggestionsMenu.item() { menu.addItem(suggestions) }
+        if let digest = suggestionsMenu.digestItem() { menu.addItem(digest) }
 
         menu.addItem(.separator())
         let addTask = action("Add task…", #selector(addTask))
@@ -107,6 +108,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(projectsMenu.item())
         menu.addItem(guardrailsMenu.item())
         menu.addItem(exclusionsMenu.listItem())
+        menu.addItem(suggestionsMenu.vipsItem())
 
         let permissions = [
             ActiveWindowSensor.hasAccessibility ? nil

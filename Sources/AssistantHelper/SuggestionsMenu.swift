@@ -1,8 +1,9 @@
 import AppKit
 import AssistantCore
 
-/// Suggestions ▸ in the dropdown: each one accepted or dismissed in one click, or opened in Gmail.
-/// Also connecting Gmail to Dara's own Google OAuth client.
+/// Suggestions ▸ and Worth knowing ▸ in the dropdown: a Suggestion accepted or dismissed in one
+/// click, a Digest line made a Suggestion in one click, either opened in Gmail. Also the VIP list,
+/// and connecting Gmail to Dara's own Google OAuth client.
 @MainActor
 final class SuggestionsMenu: NSObject {
     private let assistant: Assistant
@@ -31,6 +32,55 @@ final class SuggestionsMenu: NSObject {
         }
         root.submenu = menu
         return root
+    }
+
+    /// The Digest: at most five Worth-knowing lines, newest first.
+    func digestItem() -> NSMenuItem? {
+        let lines = assistant.digest
+        guard !lines.isEmpty else { return nil }
+        let root = NSMenuItem(title: "Worth knowing (\(lines.count))", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        for line in lines {
+            let entry = NSMenuItem(title: "\(Self.name(line.from)) — \(line.subject)", action: nil, keyEquivalent: "")
+            entry.toolTip = line.reason
+            let actions = NSMenu()
+            actions.addItem(lineAction("Make a Suggestion", #selector(promote(_:)), line))
+            actions.addItem(lineAction("Open in Gmail", #selector(openLine(_:)), line))
+            entry.submenu = actions
+            menu.addItem(entry)
+        }
+        root.submenu = menu
+        return root
+    }
+
+    /// VIPs ▸: Dara's list, plus a note that recent recipients count too.
+    func vipsItem() -> NSMenuItem {
+        let root = NSMenuItem(title: "VIPs", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Also: anyone you emailed in the last 90 days", action: nil, keyEquivalent: "").isEnabled = false
+        menu.addItem(.separator())
+        for vip in assistant.vips {
+            let entry = NSMenuItem(title: vip, action: nil, keyEquivalent: "")
+            entry.submenu = NSMenu()
+            let remove = NSMenuItem(title: "Remove", action: #selector(removeVIP(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = vip
+            entry.submenu?.addItem(remove)
+            menu.addItem(entry)
+        }
+        if !assistant.vips.isEmpty { menu.addItem(.separator()) }
+        let add = NSMenuItem(title: "Add a VIP…", action: #selector(addVIP), keyEquivalent: "")
+        add.target = self
+        menu.addItem(add)
+        root.submenu = menu
+        return root
+    }
+
+    /// "Sam" from "Sam <sam@work.example>", else the address.
+    static func name(_ from: String) -> String {
+        guard let open = from.firstIndex(of: "<") else { return from }
+        let name = from[..<open].trimmingCharacters(in: CharacterSet(charactersIn: " \""))
+        return name.isEmpty ? from : name
     }
 
     /// "Connect Gmail…", or the connected state with a way out.
@@ -66,6 +116,48 @@ final class SuggestionsMenu: NSObject {
         item.target = self
         item.representedObject = SuggestionBox(suggestion)
         return item
+    }
+
+    private final class LineBox: NSObject {
+        let line: DigestLine
+        init(_ line: DigestLine) { self.line = line }
+    }
+
+    private func lineAction(_ title: String, _ selector: Selector, _ line: DigestLine) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        item.representedObject = LineBox(line)
+        return item
+    }
+
+    @objc private func promote(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? LineBox else { return }
+        Attempt.run("Couldn't make it a Suggestion", then: onChange) { try assistant.promoteDigestLine(box.line.threadID) }
+    }
+
+    @objc private func openLine(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? LineBox, let url = URL(string: box.line.backLink) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func removeVIP(_ sender: NSMenuItem) {
+        guard let vip = sender.representedObject as? String else { return }
+        Attempt.run("Couldn't remove the VIP", then: onChange) { try assistant.removeVIP(vip) }
+    }
+
+    @objc private func addVIP() {
+        let alert = NSAlert()
+        alert.messageText = "Add a VIP"
+        alert.informativeText = "An email address, or @domain for everyone there. Their mail skips the bulk-mail rules but is still triaged."
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let text = field.stringValue
+        Attempt.run("Couldn't add the VIP", then: onChange) { try assistant.addVIP(text) }
     }
 
     @objc private func accept(_ sender: NSMenuItem) {

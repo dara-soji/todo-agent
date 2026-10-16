@@ -112,6 +112,9 @@ enum Shapes {
         case .windowExcluded: "The window in front is Excluded, so it can't be corrected."
         case let .notUndoable(id): "Log entry \(id.rawValue.uuidString) ran nothing, so there is nothing to undo."
         case let .unknownSuggestion(id): "No open Suggestion \(id.rawValue.uuidString)."
+        case let .unknownDigestLine(thread): "No Digest line for thread \(thread)."
+        case let .notAVIP(sender): "\(sender) isn't on the VIP list."
+        case let .alreadyVIP(sender): "\(sender) is already a VIP."
         }
     }
 }

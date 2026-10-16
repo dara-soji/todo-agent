@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 8
+    static let schemaVersion = 9
 
     public let url: URL
     private var db: OpaquePointer?
@@ -120,6 +120,10 @@ public final class SQLiteStore {
                 // One Suggestion per email thread, ever, stored whole. Never an email body.
                 try run("CREATE TABLE suggestions (thread_id TEXT PRIMARY KEY, json TEXT NOT NULL);")
             }
+            if stored < 9 {
+                // Live Digest lines only: sender, subject and reason, never a body. Cleared lines are deleted.
+                try run("CREATE TABLE digest (thread_id TEXT PRIMARY KEY, json TEXT NOT NULL);")
+            }
             try execute("""
                 INSERT INTO meta (key, value) VALUES ('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
@@ -199,9 +203,13 @@ extension SQLiteStore: AssistantStore {
             tasks: readable(Task.self, try rows("SELECT id, json FROM tasks;", columns: 2)),
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
             settings: Settings(
-                guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions()),
+                guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions(),
+                vips: try loadVIPs()),
             suggestions: readable(Suggestion.self, try rows("SELECT thread_id, json FROM suggestions;", columns: 2)),
-            mailCursor: try readSetting(Self.mailCursorKey))
+            mailCursor: try readSetting(Self.mailCursorKey),
+            digest: readable(DigestLine.self, try rows("SELECT thread_id, json FROM digest;", columns: 2)),
+            recipients: try readSetting(Self.recipientsKey)
+                .flatMap { readable([String: Date].self, [[Self.recipientsKey, $0]]).first } ?? [:])
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -241,6 +249,9 @@ extension SQLiteStore: AssistantStore {
 
     /// Gmail's history id, stored as the plain string.
     private static let mailCursorKey = "mail_cursor"
+    private static let vipsKey = "vips"
+    /// When Dara last emailed each address: who, never what.
+    private static let recipientsKey = "recent_recipients"
     private static let neutralsKey = "neutrals"
     private static let exclusionsKey = "exclusions"
 
@@ -260,6 +271,12 @@ extension SQLiteStore: AssistantStore {
     private func loadNeutrals() throws -> [NeutralKey] {
         guard let json = try readSetting(Self.neutralsKey) else { return [] }
         return readable([NeutralKey].self, [[Self.neutralsKey, json]]).first ?? []
+    }
+
+    /// Unreadable, VIPs are logged and skipped: their mail then meets the bulk rules, the stricter reading.
+    private func loadVIPs() throws -> [String] {
+        guard let json = try readSetting(Self.vipsKey) else { return [] }
+        return readable([String].self, [[Self.vipsKey, json]]).first ?? []
     }
 
     private func readSetting(_ key: String) throws -> String? {
@@ -287,6 +304,7 @@ extension SQLiteStore: AssistantStore {
                 try writeSetting(Self.guardrailKey, try encode(settings.guardrailRules))
                 try writeSetting(Self.neutralsKey, try encode(settings.neutrals))
                 try writeSetting(Self.exclusionsKey, try encode(settings.exclusions))
+                try writeSetting(Self.vipsKey, try encode(settings.vips))
             }
             for task in change.tasks {
                 try execute("""
@@ -301,6 +319,17 @@ extension SQLiteStore: AssistantStore {
                     """, suggestion.threadID, try encode(suggestion))
             }
             if let cursor = change.mailCursor { try writeSetting(Self.mailCursorKey, cursor) }
+            if let recipients = change.recipients { try writeSetting(Self.recipientsKey, try encode(recipients)) }
+            for line in change.digest {
+                if line.cleared {
+                    try execute("DELETE FROM digest WHERE thread_id = ?;", line.threadID)
+                } else {
+                    try execute("""
+                        INSERT INTO digest (thread_id, json) VALUES (?, ?)
+                        ON CONFLICT(thread_id) DO UPDATE SET json = excluded.json;
+                        """, line.threadID, try encode(line))
+                }
+            }
             for entry in entries {
                 try execute("INSERT INTO operation_log (id, at, json) VALUES (?, ?, ?);",
                             entry.id.rawValue.uuidString, String(entry.at.timeIntervalSinceReferenceDate), try encode(entry))
