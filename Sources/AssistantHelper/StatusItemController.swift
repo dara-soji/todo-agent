@@ -19,6 +19,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onAddTask: () -> Void = {}
     var onShowLog: () -> Void = {}
     var onRunSetup: () -> Void = {}
+    var currentNeedsSetup: () -> Bool = { false }
     /// Whether Claude Code can connect, for the Connect Claude Code item.
     var claudeCode: ClaudeCodeConnection.State = .starting
     /// Today's API spend, from the audit log.
@@ -145,7 +146,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                             #selector(setAPIKey)))
         if storeProblem == nil { menu.addItem(suggestionsMenu.connectionItem()) }
         menu.addItem(metadata(String(format: "Claude API today: $%.4f", currentSpend())))
-        menu.addItem(action("Run setup again…", #selector(runSetup)))
+        menu.addItem(action(currentNeedsSetup() ? "Finish setup to start…" : "Run setup again…", #selector(runSetup)))
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)

@@ -24,6 +24,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var sheetsPolling: SheetsPolling?
     private var notesPolling: NotesPolling?
     private var logWindow: OperationLogWindow?
+    /// One walkthrough at a time: it waits on permission prompts, during which the menu still works.
+    private var walkthroughRunning = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -66,10 +68,13 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
         gitWatcher.watch(assistant.repoPathsToWatch)
+        // Set once the log window exists, so it stays current while open.
+        var refreshLog: () -> Void = {}
         let changed = {
             gitWatcher.watch(assistant.repoPathsToWatch)
             statusItem.render(assistant.menuBar)
             nudgePanel.update()
+            refreshLog()
         }
         nudgePanel.onChange = changed
         modelCalls.onChange = changed
@@ -93,13 +98,28 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let logWindow = OperationLogWindow(assistant: assistant)
         logWindow.onChange = changed
         self.logWindow = logWindow
+        refreshLog = { logWindow.reload() }
         statusItem.onShowLog = { logWindow.show() }
-        let walkthrough = {
+        statusItem.currentNeedsSetup = { assistant.needsSetup }
+        let walkthrough = { [weak self] in
+            guard let self, !self.walkthroughRunning else { return }
+            self.walkthroughRunning = true
             await SetupWalkthrough.run(assistant, askForAPIKey: { StatusItemController.askForAPIKey() },
                                        connectGoogle: { suggestionsMenu.connectGoogle() })
+            self.walkthroughRunning = false
             changed()
         }
-        statusItem.onRunSetup = { _Concurrency.Task { await walkthrough() } }
+        statusItem.onRunSetup = { [weak self] in
+            _Concurrency.Task {
+                let wasNeeded = assistant.needsSetup
+                await walkthrough()
+                // Finished from the menu after "Later": reading starts now.
+                if wasNeeded, !assistant.needsSetup, storeProblem == nil {
+                    self?.startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling,
+                                       notesPolling: notesPolling)
+                }
+            }
+        }
 
         // Without the store, the exclude list can't be trusted, so nothing is read at all.
         guard storeProblem == nil else { return }
@@ -107,6 +127,8 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             // First run: the walkthrough explains each permission before macOS asks for it.
             _Concurrency.Task { [weak self] in
                 await walkthrough()
+                // "Later": nothing is read until setup is done, so exclusions come first.
+                guard !assistant.needsSetup else { return }
                 self?.startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling,
                                    notesPolling: notesPolling)
             }

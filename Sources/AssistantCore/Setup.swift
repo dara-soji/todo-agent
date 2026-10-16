@@ -51,19 +51,39 @@ extension Assistant {
         }
     }
 
+    /// A log summary with any quoted title taken out: "Added “X”" becomes "Added a Task since purged".
+    static func withoutTitles(_ summary: String) -> String {
+        guard let open = summary.firstIndex(of: "“") else { return summary }
+        return summary[..<open].trimmingCharacters(in: .whitespaces) + " a Task since purged"
+    }
+
     /// Retention: the Operation log and Now history keep 90 days, the API audit 30, and the Deleted
-    /// list 30 (Tasks older are purged for good). Runs once a day by itself.
+    /// list 30. A Task purged from it is gone for good: also taken out of the log entries that
+    /// remain, which can then no longer be undone. Runs once a day by itself.
     public func pruneLogs() {
         let cutoffs = Retention.Cutoffs(
             log: clock.now - Retention.operationLog, audit: clock.now - Retention.audit,
             history: clock.now - Retention.nowHistory)
+        // Tried once a day: a store that fails isn't retried on every Signal.
+        prunedOn = calendar.startOfDay(for: clock.now)
         let purged = deletedTasks.filter { clock.now.timeIntervalSince($0.deletedAt!) >= Retention.deletedTasks }.map(\.id)
+        let gone = Set(purged)
+        let rewritten = operationLog.filter { entry in
+            entry.at >= cutoffs.log && (entry.before.tasks + entry.after.tasks).contains { gone.contains($0.id) }
+        }.map { entry in
+            var before = entry.before, after = entry.after
+            before.tasks.removeAll { gone.contains($0.id) }
+            after.tasks.removeAll { gone.contains($0.id) }
+            return LogEntry(
+                id: entry.id, at: entry.at, kind: entry.kind, summary: Self.withoutTitles(entry.summary), tier: entry.tier,
+                startedBy: entry.startedBy, confirmation: entry.confirmation, before: before, after: after,
+                undoes: entry.undoes, purged: true)
+        }
         do {
-            try store.prune(cutoffs, purging: purged)
+            try store.prune(cutoffs, purging: purged, rewriting: rewritten)
         } catch {
             return NSLog("TodoAgent: pruning logs failed: \(type(of: error))")
         }
-        prunedOn = calendar.startOfDay(for: clock.now)
-        forget(tasks: purged, logBefore: cutoffs.log)
+        forget(tasks: purged, logBefore: cutoffs.log, rewritten: rewritten)
     }
 }

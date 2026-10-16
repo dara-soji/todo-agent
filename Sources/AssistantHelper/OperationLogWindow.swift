@@ -19,11 +19,21 @@ final class OperationLogWindow: NSObject, NSTableViewDataSource, NSTableViewDele
     }
 
     func show() {
-        entries = assistant.operationLog.reversed()
         if panel == nil { build() }
-        table.reloadData()
+        reload()
         NSApp.activate()
         panel?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Brings an open window up to date, keeping the selected entry selected.
+    func reload() {
+        guard panel?.isVisible == true || entries.isEmpty else { return }
+        let selected = entries.indices.contains(table.selectedRow) ? entries[table.selectedRow].id : nil
+        entries = assistant.operationLog.reversed()
+        table.reloadData()
+        if let selected, let row = entries.firstIndex(where: { $0.id == selected }) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
     }
 
     private func build() {
@@ -74,8 +84,14 @@ final class OperationLogWindow: NSObject, NSTableViewDataSource, NSTableViewDele
             case .expired: "Expired"
             }
         }
-        let field = NSTextField(labelWithString: text)
-        field.lineBreakMode = .byTruncatingTail
+        let id = NSUserInterfaceItemIdentifier("cell-" + (column?.identifier.rawValue ?? ""))
+        let field = tableView.makeView(withIdentifier: id, owner: self) as? NSTextField ?? {
+            let field = NSTextField(labelWithString: "")
+            field.identifier = id
+            field.lineBreakMode = .byTruncatingTail
+            return field
+        }()
+        field.stringValue = text
         field.toolTip = text
         return field
     }
@@ -84,6 +100,6 @@ final class OperationLogWindow: NSObject, NSTableViewDataSource, NSTableViewDele
         guard entries.indices.contains(table.selectedRow) else { return }
         let entry = entries[table.selectedRow]
         Attempt.run("Couldn't undo that", then: onChange) { try assistant.undo(entry.id) }
-        show()
+        reload()
     }
 }

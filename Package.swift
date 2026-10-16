@@ -31,6 +31,8 @@ let package = Package(
         // Fakes for the core's ports, shared by both test seams.
         .target(name: "AssistantTestSupport", dependencies: ["AssistantCore"], path: "Tests/AssistantTestSupport"),
         .testTarget(name: "AssistantCoreTests", dependencies: ["AssistantCore", "AssistantTestSupport"]),
+        // The SQLite store against a real file in a temporary folder.
+        .testTarget(name: "AssistantPersistenceTests", dependencies: ["AssistantPersistence", "AssistantCore"]),
         .testTarget(name: "AssistantMCPContractTests", dependencies: [
             "AssistantMCP", "AssistantCore", "AssistantTestSupport",
             .product(name: "MCP", package: "swift-sdk"),

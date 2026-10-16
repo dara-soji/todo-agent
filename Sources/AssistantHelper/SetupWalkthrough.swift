@@ -1,5 +1,6 @@
 import AppKit
 import AssistantCore
+import CoreServices
 import EventKit
 
 /// The first-run walkthrough: each permission with why it's needed, the VS Code title tip, the
@@ -15,12 +16,15 @@ enum SetupWalkthrough {
         ("com.microsoft.edgemac", "Microsoft Edge"), ("company.thebrowser.Browser", "Arc"),
     ]
 
-    static func run(_ assistant: Assistant, askForAPIKey: () -> Void, connectGoogle: @escaping () -> Void) async {
+    /// True once it was gone through; false for "Later", when nothing is read until it is.
+    @discardableResult
+    static func run(_ assistant: Assistant, askForAPIKey: () -> Void, connectGoogle: @escaping () -> Void) async -> Bool {
         NSApp.activate()
         if step("Welcome to TodoAgent", """
             It shows what you're working on now and what to do next, from your own Tasks, email, \
-            Sheets and notes. A few permissions make that work; each one is optional.
-            """, primary: "Start", secondary: "Later") == false { return }
+            Sheets and notes. A few permissions make that work; each one is optional. Nothing is read \
+            until you've been through this.
+            """, primary: "Start", secondary: "Later") == false { return false }
 
         if step("Read window titles (Accessibility)", """
             To tell which Project you're in from the front window's title, e.g. a repo path in VS Code. \
@@ -35,12 +39,15 @@ enum SetupWalkthrough {
 
         let installed = browsers.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.0) != nil }
         if step("Read the front tab's address and your notes (Automation)", """
-            So web work can match your Projects (\\(installed.map(\\.1).joined(separator: ", "))), and so \
-            open actions in Apple Notes become Suggestions. macOS asks once per app. Private windows and \
-            Excluded folders are never read.
+            So web work can match your Projects (\(installed.map(\.1).joined(separator: ", "))), and so \
+            open actions in Apple Notes become Suggestions. macOS asks once per app: now for the ones that \
+            are open, otherwise the first time each is used. Private windows and Excluded folders are never read.
             """) == true {
-            for (bundleID, _) in installed { await askAutomation(bundleID) }
-            await askAutomation("com.apple.Notes")
+            // Only apps already running: an Apple Event would open the others.
+            let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+            for bundleID in installed.map(\.0) + ["com.apple.Notes"] where running.contains(bundleID) {
+                await askAutomation(bundleID)
+            }
         }
 
         if step("Guess unmatched windows (Screen Recording)", """
@@ -74,6 +81,7 @@ enum SetupWalkthrough {
 
         SetupProposals.offer(assistant)
         assistant.finishSetup()
+        return true
     }
 
     /// True for the primary button, false for the secondary.
@@ -87,13 +95,13 @@ enum SetupWalkthrough {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// A harmless Apple Event to the app, so macOS shows its Automation prompt now, with the
-    /// walkthrough's reason fresh. It reads only the app's name.
+    /// Asks macOS for permission to automate the running app now, with the walkthrough's reason
+    /// fresh. No event is sent and nothing is read.
     private static func askAutomation(_ bundleID: String) async {
         await withCheckedContinuation { continuation in
             AppleScriptQueue.shared.async {
-                var error: NSDictionary?
-                NSAppleScript(source: "tell application id \"\(bundleID)\" to get name")?.executeAndReturnError(&error)
+                let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+                _ = AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, true)
                 continuation.resume()
             }
         }
@@ -124,16 +132,24 @@ enum SetupWalkthrough {
         }
     }
 
-    /// Apps in /Applications and ~/Applications, by bundle id and name.
+    /// Apps in /Applications, ~/Applications and /System/Applications, one folder deep (Utilities,
+    /// Setapp), by bundle id and name.
     static func installedApps() -> [App] {
         let files = FileManager.default
-        let folders = ["/Applications", (NSHomeDirectory() as NSString).appendingPathComponent("Applications")]
-        return folders.flatMap { folder in
-            ((try? files.contentsOfDirectory(atPath: folder)) ?? []).filter { $0.hasSuffix(".app") }.compactMap { name in
-                let bundle = Bundle(path: (folder as NSString).appendingPathComponent(name))
-                guard let id = bundle?.bundleIdentifier else { return nil }
-                return App(bundleID: id, name: (name as NSString).deletingPathExtension)
+        let roots = ["/Applications", (NSHomeDirectory() as NSString).appendingPathComponent("Applications"), "/System/Applications"]
+        func apps(in folder: String, depth: Int) -> [App] {
+            ((try? files.contentsOfDirectory(atPath: folder)) ?? []).flatMap { name -> [App] in
+                let path = (folder as NSString).appendingPathComponent(name)
+                guard name.hasSuffix(".app") else {
+                    var isDir: ObjCBool = false
+                    let folder = depth > 0 && files.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+                    return folder ? apps(in: path, depth: depth - 1) : []
+                }
+                guard let id = Bundle(path: path)?.bundleIdentifier else { return [] }
+                return [App(bundleID: id, name: (name as NSString).deletingPathExtension)]
             }
         }
+        var seen = Set<String>()
+        return roots.flatMap { apps(in: $0, depth: 1) }.filter { seen.insert($0.bundleID).inserted }
     }
 }

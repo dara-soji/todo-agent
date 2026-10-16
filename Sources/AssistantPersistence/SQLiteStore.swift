@@ -258,13 +258,16 @@ extension SQLiteStore: AssistantStore {
                  columns: 1).first.flatMap { Double($0[0]) } ?? 0
     }
 
-    public func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID]) throws {
+    public func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID], rewriting rewritten: [LogEntry]) throws {
         try run("BEGIN IMMEDIATE;")
         do {
             try execute("DELETE FROM operation_log WHERE at < ?;", String(cutoffs.log.timeIntervalSinceReferenceDate))
             try execute("DELETE FROM api_audit WHERE at < ?;", String(cutoffs.audit.timeIntervalSinceReferenceDate))
             try execute("DELETE FROM now_history WHERE end < ?;", String(cutoffs.history.timeIntervalSinceReferenceDate))
             for task in tasks { try execute("DELETE FROM tasks WHERE id = ?;", task.rawValue.uuidString) }
+            for entry in rewritten {
+                try execute("UPDATE operation_log SET json = ? WHERE id = ?;", try encode(entry), entry.id.rawValue.uuidString)
+            }
             try run("COMMIT;")
         } catch {
             try? run("ROLLBACK;")

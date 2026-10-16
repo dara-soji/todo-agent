@@ -233,6 +233,38 @@ public struct LogEntry: Identifiable, Equatable, Sendable, Codable {
     public let after: Change
     /// For an undo, the entry it reversed.
     public let undoes: ID?
+    /// A Task it wrote was purged from the Deleted list and taken out of it: it can't be undone.
+    public let purged: Bool
+
+    init(
+        id: ID, at: Date, kind: OperationKind, summary: String, tier: Tier, startedBy: StartedBy,
+        confirmation: Confirmation, before: Change, after: Change, undoes: ID?, purged: Bool = false
+    ) {
+        self.id = id
+        self.at = at
+        self.kind = kind
+        self.summary = summary
+        self.tier = tier
+        self.startedBy = startedBy
+        self.confirmation = confirmation
+        self.before = before
+        self.after = after
+        self.undoes = undoes
+        self.purged = purged
+    }
+
+    /// Entries stored before `purged` existed still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(ID.self, forKey: .id), at: try c.decode(Date.self, forKey: .at),
+            kind: try c.decode(OperationKind.self, forKey: .kind), summary: try c.decode(String.self, forKey: .summary),
+            tier: try c.decode(Tier.self, forKey: .tier), startedBy: try c.decode(StartedBy.self, forKey: .startedBy),
+            confirmation: try c.decode(Confirmation.self, forKey: .confirmation),
+            before: try c.decode(Change.self, forKey: .before), after: try c.decode(Change.self, forKey: .after),
+            undoes: try c.decodeIfPresent(ID.self, forKey: .undoes),
+            purged: try c.decodeIfPresent(Bool.self, forKey: .purged) ?? false)
+    }
 }
 
 /// Persistence port. The helper's SQLite store conforms; tests use an in-memory fake.
@@ -247,8 +279,9 @@ public protocol AssistantStore {
     /// What the API calls in the audit log since `since` cost.
     func apiSpend(since: Date) throws -> Double
     /// Retention: drops log entries, audit lines and Now history from before each date, and the
-    /// Tasks given (purged from the Deleted list), together.
-    func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID]) throws
+    /// Tasks given (purged from the Deleted list), and stores `rewritten` log entries over their old
+    /// versions (with the purged Tasks taken out), together.
+    func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID], rewriting rewritten: [LogEntry]) throws
 }
 
 /// How long each log is kept, and the Deleted list.
@@ -267,8 +300,11 @@ public enum Retention {
 
 extension StoreSnapshot {
     /// What `prune` does, for stores that keep a snapshot.
-    public mutating func prune(_ cutoffs: Retention.Cutoffs, purging ids: [Task.ID]) {
+    public mutating func prune(_ cutoffs: Retention.Cutoffs, purging ids: [Task.ID], rewriting rewritten: [LogEntry]) {
         log.removeAll { $0.at < cutoffs.log }
+        for entry in rewritten {
+            if let index = log.firstIndex(where: { $0.id == entry.id }) { log[index] = entry }
+        }
         audit.removeAll { $0.at < cutoffs.audit }
         history.removeAll { $0.end < cutoffs.history }
         tasks.removeAll { ids.contains($0.id) }

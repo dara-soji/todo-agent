@@ -116,6 +116,60 @@ import AssistantTestSupport
         #expect(assistant.deletedTasks.isEmpty)
     }
 
+    @Test func pruningRunsOnceADayAndAFailureWaitsForTomorrow() throws {
+        let assistant = makeAssistant()
+        assistant.receive(.userIdle(seconds: 0))
+        assistant.receive(.userIdle(seconds: 0))
+        #expect(store.prunes == 1)
+
+        store.failWrites = true
+        days(1)
+        assistant.receive(.userIdle(seconds: 0))
+        assistant.receive(.userIdle(seconds: 0))
+        #expect(store.prunes == 2)
+    }
+
+    @Test func aFailedPruneForgetsNothing() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("Old")
+        try assistant.deleteTask(task.id)
+        days(31)
+        store.failWrites = true
+
+        assistant.pruneLogs()
+
+        #expect(assistant.deletedTasks.map(\.title) == ["Old"])
+        #expect(assistant.operationLog.count == 2)
+    }
+
+    @Test func aPurgedTaskIsGoneFromTheLogsThatRemainToo() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("SECRET-TITLE")
+        days(10)
+        try assistant.deleteTask(task.id)
+        days(31)
+
+        assistant.pruneLogs()
+
+        #expect(!String(describing: try store.load()).contains("SECRET-TITLE"))
+        #expect(!String(describing: makeAssistant().operationLog).contains("SECRET-TITLE"))
+        #expect(throws: Assistant.Failure.notUndoable(try #require(assistant.operationLog.last).id)) {
+            try assistant.undo(try #require(assistant.operationLog.last).id)
+        }
+    }
+
+    @Test func multiWordBankingNamesAreFound() {
+        let assistant = makeAssistant()
+        let offers = assistant.exclusionOffers(installed: [App(bundleID: "com.squareup.cash", name: "Cash App")])
+        #expect(offers.map(\.why) == [.banking])
+    }
+
+    @Test func laterLeavesSetupToDo() {
+        let assistant = makeAssistant()
+        assistant.receive(.userIdle(seconds: 0))
+        #expect(makeAssistant().needsSetup)
+    }
+
     @Test func aPurgedTasksOldEntriesCanNoLongerBeUndone() throws {
         let assistant = makeAssistant()
         let task = try assistant.quickAdd("Old")

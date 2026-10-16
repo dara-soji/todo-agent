@@ -310,7 +310,7 @@ public final class Assistant {
     @discardableResult
     public func undo(_ id: LogEntry.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
         guard let entry = operationLog.first(where: { $0.id == id }) else { throw Failure.unknownLogEntry(id) }
-        guard entry.confirmation != .declined, entry.confirmation != .expired else { throw Failure.notUndoable(id) }
+        guard entry.confirmation != .declined, entry.confirmation != .expired, !entry.purged else { throw Failure.notUndoable(id) }
         guard isCurrent(entry.after) else { throw Failure.changedSince(id) }
         return try perform(.undo, "Undid: \(entry.summary)", by: startedBy, writing: entry.before, undoes: id)
     }
@@ -537,9 +537,12 @@ public final class Assistant {
     }
 
     /// After a prune: purged Tasks and log entries past retention leave memory too.
-    func forget(tasks purged: [Task.ID], logBefore cutoff: Date) {
+    func forget(tasks purged: [Task.ID], logBefore cutoff: Date, rewritten: [LogEntry]) {
         for id in purged { tasksByID[id] = nil }
         operationLog.removeAll { $0.at < cutoff }
+        for entry in rewritten {
+            if let index = operationLog.firstIndex(where: { $0.id == entry.id }) { operationLog[index] = entry }
+        }
     }
 
     private func apply(_ change: Change) {
