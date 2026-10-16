@@ -38,6 +38,8 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     case sourceUpdate
     /// Dara taking a sender off "Never from this sender".
     case forgetNoiseSender
+    /// Dara choosing which Google Sheets are read.
+    case registerSheet, unregisterSheet
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail
@@ -108,11 +110,14 @@ public struct Settings: Equatable, Sendable, Codable {
     public var vips: [String]
     /// "Never from this sender": their mail is Noise, without asking the model.
     public var noiseSenders: [String]
+    /// The Google Sheets Dara registered as Sources; no other sheet is read.
+    public var sheets: [RegisteredSheet]
 
     public init(
         guardrailRules: [GuardrailRule] = [], neutrals: [NeutralKey] = [], exclusions: [Exclusion] = [], vips: [String] = [],
-        noiseSenders: [String] = []
+        noiseSenders: [String] = [], sheets: [RegisteredSheet] = []
     ) {
+        self.sheets = sheets
         self.noiseSenders = noiseSenders
         self.guardrailRules = guardrailRules
         self.neutrals = neutrals
@@ -128,7 +133,8 @@ public struct Settings: Equatable, Sendable, Codable {
             neutrals: try c.decode([NeutralKey].self, forKey: .neutrals),
             exclusions: try c.decode([Exclusion].self, forKey: .exclusions),
             vips: try c.decodeIfPresent([String].self, forKey: .vips) ?? [],
-            noiseSenders: try c.decodeIfPresent([String].self, forKey: .noiseSenders) ?? [])
+            noiseSenders: try c.decodeIfPresent([String].self, forKey: .noiseSenders) ?? [],
+            sheets: try c.decodeIfPresent([RegisteredSheet].self, forKey: .sheets) ?? [])
     }
 }
 

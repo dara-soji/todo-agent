@@ -4,11 +4,11 @@ import Foundation
 import Network
 
 /// Signs in to Dara's own Google OAuth desktop client (ADR 0003): the browser, a one-shot loopback
-/// listener on 127.0.0.1 and PKCE. Asks only for gmail.readonly. The client and the refresh token
+/// listener on 127.0.0.1 and PKCE. Asks only for gmail.readonly and spreadsheets.readonly. The client and the refresh token
 /// live in the Keychain; the access token only in memory, refreshed as it runs out.
 @MainActor
 final class GoogleAuth {
-    static let scope = "https://www.googleapis.com/auth/gmail.readonly"
+    static let scope = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/spreadsheets.readonly"
     private static let authorizeURL = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     private static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     /// How long the browser sign-in may take.

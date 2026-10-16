@@ -17,7 +17,7 @@ public final class SQLiteStore {
         }
     }
 
-    static let schemaVersion = 9
+    static let schemaVersion = 10
 
     public let url: URL
     private var db: OpaquePointer?
@@ -124,6 +124,15 @@ public final class SQLiteStore {
                 // Digest lines: sender, subject and reason, never a body. Deleted once past their day.
                 try run("CREATE TABLE digest (thread_id TEXT PRIMARY KEY, json TEXT NOT NULL);")
             }
+            if stored >= 3 && stored < 10 {
+                // v10 allows Sheet id Matchers: rebuild the table for its CHECK, as v3 did.
+                try run("""
+                    \(Self.matchersTable("matchers_v10"))
+                    INSERT INTO matchers_v10 SELECT project_id, position, kind, pattern FROM matchers;
+                    DROP TABLE matchers;
+                    ALTER TABLE matchers_v10 RENAME TO matchers;
+                    """)
+            }
             try execute("""
                 INSERT INTO meta (key, value) VALUES ('schema_version', ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
@@ -140,7 +149,7 @@ public final class SQLiteStore {
         CREATE TABLE \(name) (
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             position INTEGER NOT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('repoPath', 'urlPrefix', 'calendarKeyword')),
+            kind TEXT NOT NULL CHECK (kind IN ('repoPath', 'urlPrefix', 'calendarKeyword', 'sheetID')),
             pattern TEXT NOT NULL,
             PRIMARY KEY (project_id, position)
         );
@@ -204,7 +213,7 @@ extension SQLiteStore: AssistantStore {
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
             settings: Settings(
                 guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions(),
-                vips: try loadVIPs(), noiseSenders: try loadNoiseSenders()),
+                vips: try loadVIPs(), noiseSenders: try loadNoiseSenders(), sheets: try loadSheets()),
             suggestions: readable(Suggestion.self, try rows("SELECT thread_id, json FROM suggestions;", columns: 2)),
             mailCursor: try readSetting(Self.mailCursorKey),
             digest: readable(DigestLine.self, try rows("SELECT thread_id, json FROM digest;", columns: 2)),
@@ -251,6 +260,7 @@ extension SQLiteStore: AssistantStore {
     private static let mailCursorKey = "mail_cursor"
     private static let vipsKey = "vips"
     private static let noiseSendersKey = "noise_senders"
+    private static let sheetsKey = "sheets"
     /// When Dara last emailed each address: who, never what.
     private static let recipientsKey = "recent_recipients"
     private static let neutralsKey = "neutrals"
@@ -286,6 +296,13 @@ extension SQLiteStore: AssistantStore {
         return readable([String].self, [[Self.noiseSendersKey, json]]).first ?? []
     }
 
+    /// Registered sheets. Unreadable, they are logged and skipped: no sheet is read until Dara
+    /// registers it again, the stricter reading.
+    private func loadSheets() throws -> [RegisteredSheet] {
+        guard let json = try readSetting(Self.sheetsKey) else { return [] }
+        return readable([RegisteredSheet].self, [[Self.sheetsKey, json]]).first ?? []
+    }
+
     private func readSetting(_ key: String) throws -> String? {
         try rows("SELECT key, json FROM settings;", columns: 2).first { $0[0] == key }?[1]
     }
@@ -313,6 +330,7 @@ extension SQLiteStore: AssistantStore {
                 try writeSetting(Self.exclusionsKey, try encode(settings.exclusions))
                 try writeSetting(Self.vipsKey, try encode(settings.vips))
                 try writeSetting(Self.noiseSendersKey, try encode(settings.noiseSenders))
+                try writeSetting(Self.sheetsKey, try encode(settings.sheets))
             }
             for task in change.tasks {
                 try execute("""

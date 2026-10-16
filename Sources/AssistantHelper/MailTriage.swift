@@ -8,13 +8,14 @@ import Foundation
 final class MailTriage {
     static let interval: TimeInterval = 5 * 60
 
-    let auth = GoogleAuth()
+    let auth: GoogleAuth
     private let runner: TriageRunner
     private var timer: Timer?
     private var wake: NSObjectProtocol?
     var onChange: () -> Void = {}
 
-    init(assistant: Assistant) {
+    init(assistant: Assistant, auth: GoogleAuth) {
+        self.auth = auth
         runner = TriageRunner(
             assistant: assistant, mail: GmailSource(auth: auth),
             triager: ClaudeClient(apiKey: { ClaudeAPIKey.load() }), notifier: UserNotifier())

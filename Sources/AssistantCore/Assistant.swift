@@ -45,6 +45,10 @@ public final class Assistant {
         case notAVIP(String)
         case alreadyVIP(String)
         case notANoiseSender(String)
+        /// Not a Google Sheet id or URL.
+        case malformedSheet(String)
+        case alreadyRegisteredSheet(String)
+        case unknownSheet(String)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.

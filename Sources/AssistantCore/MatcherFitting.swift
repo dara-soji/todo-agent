@@ -26,6 +26,9 @@ struct MatcherFitting {
             let keyword = keyword.trimmingCharacters(in: .whitespaces)
             guard keyword.count >= 2 else { throw Matcher.Invalid.shortKeyword(keyword) }
             return .calendarKeyword(keyword)
+        case let .sheetID(text):
+            guard let id = Self.sheetID(in: text) else { throw Matcher.Invalid.malformedSheetID(text) }
+            return .sheetID(id)
         }
     }
 
@@ -40,7 +43,22 @@ struct MatcherFitting {
             return urlFits(prefix: prefix, page: page)
         case .calendarKeyword:
             return false
+        case let .sheetID(id):
+            guard let page = page(of: window) else { return false }
+            let prefix = "docs.google.com/spreadsheets/d/\(id)"
+            return page == prefix || page.hasPrefix(prefix + "/")
         }
+    }
+
+    /// The id in a Google Sheet's id or URL, or nil if it isn't one.
+    static func sheetID(in text: String) -> String? {
+        var id = text.trimmingCharacters(in: .whitespaces)
+        if let range = id.range(of: "/spreadsheets/d/") {
+            id = String(id[range.upperBound...].prefix { $0 != "/" && $0 != "?" && $0 != "#" })
+        }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        guard !id.isEmpty, id.unicodeScalars.allSatisfy({ allowed.contains($0) && $0.isASCII }) else { return nil }
+        return id
     }
 
     /// Whether a stored calendar-keyword Matcher fits an event's title.

@@ -81,6 +81,8 @@ public struct MenuBar: Equatable, Sendable {
 
     private static func evidence(_ match: Now.Match, window: ActiveWindow?, branch: String?) -> String {
         switch match.basis {
+        case let .matcher(.sheetID(id)):
+            return "Matched by sheet \(id)"
         case let .matcher(matcher):
             return "Matched by \(matcher.pattern)" + (branch.map { " · \($0)" } ?? "")
         case let .meeting(matcher, event):

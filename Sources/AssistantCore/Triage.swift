@@ -149,6 +149,7 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     }
 
     public let id: ID
+    /// Its Source key, one Suggestion per key: a Gmail thread id, or "sheet:<id>:<row>".
     public let threadID: String
     public var title: String
     /// Why Triage made it, in one line.
@@ -169,12 +170,15 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     public var repliedAt: Date?
     /// The reply Dara last answered "Not yet" to.
     public var notYetAt: Date?
+    /// For a sheet row, its cells as last read: an edit is any change to them.
+    public var fingerprint: String?
 
     init(
         id: ID, threadID: String, title: String, reason: String, source: Task.Source, backLink: String,
         guessedDeadline: Date?, created: Date, status: Status, from: String? = nil, messageAt: Date? = nil,
-        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil
+        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil, fingerprint: String? = nil
     ) {
+        self.fingerprint = fingerprint
         self.repliedAt = repliedAt
         self.notYetAt = notYetAt
         self.id = id
@@ -204,7 +208,8 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
             messageAt: try c.decodeIfPresent(Date.self, forKey: .messageAt),
             task: try c.decodeIfPresent(Task.ID.self, forKey: .task),
             repliedAt: try c.decodeIfPresent(Date.self, forKey: .repliedAt),
-            notYetAt: try c.decodeIfPresent(Date.self, forKey: .notYetAt))
+            notYetAt: try c.decodeIfPresent(Date.self, forKey: .notYetAt),
+            fingerprint: try c.decodeIfPresent(String.self, forKey: .fingerprint))
     }
 }
 
@@ -327,7 +332,11 @@ extension Assistant {
     public var suggestions: [Suggestion] {
         let held = asks.reduce(into: Set<UUID>()) { $0.formUnion($1.touches) }
         return suggestionsByThread.values.filter { $0.status == .open && !held.contains($0.id.rawValue) }
-            .sorted { $0.created < $1.created }
+            .sorted { a, b in
+                // Made together (a sheet's rows): in key order, row 2 before row 10.
+                a.created != b.created ? a.created < b.created
+                    : a.threadID.compare(b.threadID, options: .numeric) == .orderedAscending
+            }
     }
 
     /// Whether Haiku should see this email: inbox mail Dara didn't send, not from an Excluded sender,
