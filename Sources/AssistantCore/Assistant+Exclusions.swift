@@ -57,8 +57,10 @@ extension Assistant {
     public func exclude(_ exclusion: Exclusion, by startedBy: StartedBy = .dara) throws -> Outcome {
         let exclusion = try exclusion.normalised()
         guard !exclusions.contains(exclusion) else { throw Failure.alreadyExcluded(exclusion) }
-        return try perform(.addExclusion, "Added an exclusion", by: startedBy,
-                           writing: changingSettings { $0.exclusions.append(exclusion) })
+        var change = changingSettings { $0.exclusions.append(exclusion) }
+        // Lines already in the Digest from that sender go too.
+        change.digest = clearingExcluded(by: [exclusion])
+        return try perform(.addExclusion, "Added an exclusion", by: startedBy, writing: change)
     }
 
     /// Takes something off the exclude list. Ask: Dara confirms in the menu bar.

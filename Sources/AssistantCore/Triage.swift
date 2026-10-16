@@ -59,8 +59,11 @@ public protocol MailSource: AnyObject {
     func fetchNew(after cursor: String?) async throws -> MailBatch
     /// One message's plain-text body, attachments left out. Asked for only for mail Triage sends.
     func plainText(of message: EmailMessage) async throws -> String
-    /// Which of these threads still have unread mail; the rest Dara has read in Gmail.
+    /// Which of these threads still have unread mail; the rest Dara has read in Gmail (or deleted).
     func unreadThreads(among threadIDs: [String]) async throws -> Set<String>
+    /// Mail Dara sent in the last 90 days, recipients and dates only: asked for once, while no
+    /// recent recipients are known.
+    func recentlySent() async throws -> [SentMail]
 }
 
 /// Port: a macOS notification. Only for a VIP's Action due today or tomorrow.
@@ -79,6 +82,7 @@ public enum EmailTier: String, Sendable, Codable, CaseIterable {
 }
 
 /// A Worth-knowing email as the Digest shows it: who, what and why, never the body. One per thread.
+/// A cleared line is kept until its day is up, so the same email can't bring it back.
 public struct DigestLine: Equatable, Sendable, Codable {
     public let threadID: String
     public let from: String
@@ -86,7 +90,7 @@ public struct DigestLine: Equatable, Sendable, Codable {
     public let reason: String
     public let backLink: String
     public let receivedAt: Date
-    /// Read in Gmail, past its day, promoted, or overtaken by a Suggestion: the store drops it.
+    /// Read in Gmail, promoted, overtaken by a Suggestion, or its sender Excluded.
     public var cleared: Bool
 }
 
@@ -164,6 +168,8 @@ public final class TriageRunner {
     private let triager: EmailTriager
     private let notifier: Notifier?
     private var running = false
+    /// The 90-day sent-mail read has been done this run of the helper.
+    private var backfilledRecipients = false
     /// Message ids already sorted this run of the helper, so a retried batch skips them.
     private var sorted: Set<String> = []
     static let sortedLimit = 5_000
@@ -188,6 +194,14 @@ public final class TriageRunner {
             return NSLog("TodoAgent: mail fetch failed: \(type(of: error))")
         }
         // Recipients first, so someone Dara just wrote to is already a VIP for this batch.
+        if !backfilledRecipients, assistant.knowsNoRecipients {
+            do {
+                assistant.recordRecipients(try await mail.recentlySent())
+                backfilledRecipients = true
+            } catch {
+                NSLog("TodoAgent: reading sent mail failed: \(type(of: error))")
+            }
+        }
         assistant.recordRecipients(batch.sent)
         var handledAll = true
         for message in batch.messages {

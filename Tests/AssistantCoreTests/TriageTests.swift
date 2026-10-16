@@ -25,8 +25,20 @@ final class FakeMailSource: MailSource {
         return MailBatch(messages: messages, sent: sent, cursor: nextCursor)
     }
 
+    var unreadFails = false
+
     func unreadThreads(among threadIDs: [String]) async throws -> Set<String> {
-        Set(threadIDs).subtracting(readThreads)
+        if unreadFails { throw URLError(.timedOut) }
+        return Set(threadIDs).subtracting(readThreads)
+    }
+
+    /// The 90-day sent-mail read, and how often it was asked for.
+    var recent: [SentMail] = []
+    var recentAsked = 0
+
+    func recentlySent() async throws -> [SentMail] {
+        recentAsked += 1
+        return recent
     }
 
     func plainText(of message: EmailMessage) async throws -> String {

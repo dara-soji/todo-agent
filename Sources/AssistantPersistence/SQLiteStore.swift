@@ -121,7 +121,7 @@ public final class SQLiteStore {
                 try run("CREATE TABLE suggestions (thread_id TEXT PRIMARY KEY, json TEXT NOT NULL);")
             }
             if stored < 9 {
-                // Live Digest lines only: sender, subject and reason, never a body. Cleared lines are deleted.
+                // Digest lines: sender, subject and reason, never a body. Deleted once past their day.
                 try run("CREATE TABLE digest (thread_id TEXT PRIMARY KEY, json TEXT NOT NULL);")
             }
             try execute("""
@@ -321,15 +321,12 @@ extension SQLiteStore: AssistantStore {
             if let cursor = change.mailCursor { try writeSetting(Self.mailCursorKey, cursor) }
             if let recipients = change.recipients { try writeSetting(Self.recipientsKey, try encode(recipients)) }
             for line in change.digest {
-                if line.cleared {
-                    try execute("DELETE FROM digest WHERE thread_id = ?;", line.threadID)
-                } else {
-                    try execute("""
-                        INSERT INTO digest (thread_id, json) VALUES (?, ?)
-                        ON CONFLICT(thread_id) DO UPDATE SET json = excluded.json;
-                        """, line.threadID, try encode(line))
-                }
+                try execute("""
+                    INSERT INTO digest (thread_id, json) VALUES (?, ?)
+                    ON CONFLICT(thread_id) DO UPDATE SET json = excluded.json;
+                    """, line.threadID, try encode(line))
             }
+            for thread in change.droppedDigest { try execute("DELETE FROM digest WHERE thread_id = ?;", thread) }
             for entry in entries {
                 try execute("INSERT INTO operation_log (id, at, json) VALUES (?, ?, ?);",
                             entry.id.rawValue.uuidString, String(entry.at.timeIntervalSinceReferenceDate), try encode(entry))

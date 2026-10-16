@@ -13,8 +13,8 @@ final class GmailSource: MailSource {
     /// The most messages the first run reads.
     static let firstRunLimit = 200
     /// Mail Dara sent recently: its recipients are VIPs.
-    static let firstRunSentQuery = "in:sent newer_than:90d"
-    static let firstRunSentLimit = 500
+    static let recentlySentQuery = "in:sent newer_than:90d"
+    static let recentlySentLimit = 500
     /// More plain text than Triage sends; the core cuts it down.
     static let textLimit = 8_192
 
@@ -47,8 +47,11 @@ final class GmailSource: MailSource {
         let profile = try await get("profile")
         guard let history = profile["historyId"] as? String else { throw Failure.http(0) }
         let inbox = try await search(Self.firstRunQuery, limit: Self.firstRunLimit)
-        let sent = try await search(Self.firstRunSentQuery, limit: Self.firstRunSentLimit)
-        return MailBatch(messages: try await messages(inbox), sent: try await sentMail(sent), cursor: history)
+        return MailBatch(messages: try await messages(inbox), cursor: history)
+    }
+
+    func recentlySent() async throws -> [SentMail] {
+        try await sentMail(try await search(Self.recentlySentQuery, limit: Self.recentlySentLimit))
     }
 
     /// Message ids matching a Gmail search, newest first, at most `limit`.
@@ -66,35 +69,40 @@ final class GmailSource: MailSource {
         return Array(ids.prefix(limit))
     }
 
+    /// One history read for every label, so a single cursor covers inbox and sent mail alike.
+    /// Sent mail is best effort: failing to read it never holds up the inbox.
     private func sinceHistory(_ cursor: String) async throws -> MailBatch {
-        let (inbox, latestInbox) = try await added(since: cursor, label: "INBOX")
-        let (sent, latestSent) = try await added(since: cursor, label: "SENT")
-        return MailBatch(
-            messages: try await messages(inbox), sent: try await sentMail(sent),
-            cursor: [latestInbox, latestSent].max { (UInt64($0) ?? 0) < (UInt64($1) ?? 0) } ?? cursor)
-    }
-
-    /// Ids of messages added under `label` since the cursor, and the latest history id seen.
-    private func added(since cursor: String, label: String) async throws -> ([String], String) {
-        var ids: [String] = []
+        var inbox: [String] = []
+        var sent: [String] = []
         var latest = cursor
         var page: String?
         repeat {
             var query = [
                 URLQueryItem(name: "startHistoryId", value: cursor), URLQueryItem(name: "historyTypes", value: "messageAdded"),
-                URLQueryItem(name: "labelId", value: label),
             ]
             if let page { query.append(URLQueryItem(name: "pageToken", value: page)) }
             let json = try await get("history", query)
             for record in json["history"] as? [[String: Any]] ?? [] {
                 for added in record["messagesAdded"] as? [[String: Any]] ?? [] {
-                    if let id = (added["message"] as? [String: Any])?["id"] as? String, !ids.contains(id) { ids.append(id) }
+                    guard let message = added["message"] as? [String: Any], let id = message["id"] as? String else { continue }
+                    let labels = message["labelIds"] as? [String] ?? []
+                    if labels.contains("SENT") {
+                        if !sent.contains(id) { sent.append(id) }
+                    } else if labels.contains("INBOX"), !inbox.contains(id) {
+                        inbox.append(id)
+                    }
                 }
             }
             if let history = json["historyId"] as? String { latest = history }
             page = json["nextPageToken"] as? String
         } while page != nil
-        return (ids, latest)
+        var recipients: [SentMail] = []
+        do {
+            recipients = try await sentMail(sent)
+        } catch {
+            NSLog("TodoAgent: reading sent mail failed: \(type(of: error))")
+        }
+        return MailBatch(messages: try await messages(inbox), sent: recipients, cursor: latest)
     }
 
     /// Who each sent message went to, and when: the To and Cc headers only.
@@ -121,7 +129,12 @@ final class GmailSource: MailSource {
     func unreadThreads(among threadIDs: [String]) async throws -> Set<String> {
         var unread: Set<String> = []
         for thread in threadIDs {
-            let json = try await get("threads/\(thread)", [URLQueryItem(name: "format", value: "minimal")])
+            let json: [String: Any]
+            do {
+                json = try await get("threads/\(thread)", [URLQueryItem(name: "format", value: "minimal")])
+            } catch Failure.http(404) {
+                continue  // Deleted: as good as read.
+            }
             let labels = (json["messages"] as? [[String: Any]] ?? []).flatMap { $0["labelIds"] as? [String] ?? [] }
             if labels.contains("UNREAD") { unread.insert(thread) }
         }

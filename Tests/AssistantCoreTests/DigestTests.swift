@@ -164,7 +164,99 @@ final class FakeNotifier: Notifier {
         #expect(assistant.suggestions.map(\.title) == ["Sign the contract"])
     }
 
+    @Test func aReadLineDoesNotComeBackWhenTheSameEmailIsSortedAgain() async throws {
+        let assistant = makeAssistant()
+        worthKnowing()
+        let fyi = email("FYI", thread: "t1")
+        mail.messages = [fyi]
+        await runner(assistant).run()
+        mail.readThreads = ["t1"]
+        await runner(assistant).run()
+
+        mail.messages = [fyi]  // A retried batch after a restart, with Gmail's read state unavailable.
+        mail.unreadFails = true
+        await runner(makeAssistant()).run()
+
+        #expect(assistant.digest.isEmpty)
+        #expect(makeAssistant().digest.isEmpty)
+    }
+
+    @Test func excludingASenderClearsTheirLines() async throws {
+        let assistant = makeAssistant()
+        worthKnowing()
+        mail.messages = [email("Statement", from: "Bank <alerts@bank.example>"), email("FYI")]
+        await runner(assistant).run()
+
+        try assistant.exclude(.sender("@bank.example"))
+
+        #expect(assistant.digest.map(\.subject) == ["FYI"])
+        #expect(try store.load().digest.filter { !$0.cleared }.map(\.subject) == ["FYI"])
+    }
+
+    @Test func undoingAPromoteWorksAfterARestart() async throws {
+        let assistant = makeAssistant()
+        worthKnowing()
+        mail.messages = [email("Contract", thread: "t1")]
+        await runner(assistant).run()
+        try assistant.promoteDigestLine("t1")
+
+        let restarted = makeAssistant()
+        try restarted.undo(try #require(restarted.operationLog.last).id)
+
+        #expect(restarted.digest.map(\.threadID) == ["t1"])
+        #expect(restarted.suggestions.isEmpty)
+    }
+
+    @Test func aTightenedPromoteAsksAndCanBeConfirmed() async throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.promoteDigestLine)
+        worthKnowing()
+        mail.messages = [email("Contract", thread: "t1")]
+        await runner(assistant).run()
+
+        guard case .pending = try assistant.promoteDigestLine("t1") else { Issue.record("should ask"); return }
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+
+        #expect(assistant.suggestions.map(\.threadID) == ["t1"])
+        #expect(assistant.digest.isEmpty)
+    }
+
+    @Test func promotingALineThatIsntShowingFails() {
+        let assistant = makeAssistant()
+        #expect(throws: Assistant.Failure.unknownDigestLine("nope")) { try assistant.promoteDigestLine("nope") }
+    }
+
     // MARK: VIPs
+
+    @Test func recentRecipientsAreReadOnceWhenNoneAreKnownExcludedOnesLeftOut() async throws {
+        let assistant = makeAssistant()
+        try assistant.exclude(.sender("@bank.example"))
+        mail.recent = [SentMail(to: ["Alex <alex@friend.example>", "help@bank.example"], at: clock.now - 86_400)]
+        let triage = runner(assistant)
+
+        await triage.run()
+        await triage.run()
+
+        #expect(mail.recentAsked == 1)
+        #expect(assistant.isVIP(sender: "alex@friend.example"))
+        #expect(try store.load().recipients.keys.sorted() == ["alex@friend.example"])
+    }
+
+    @Test func withNoSentMailTheBackfillIsNotRepeatedEveryPoll() async {
+        let assistant = makeAssistant()
+        let triage = runner(assistant)
+        await triage.run()
+        await triage.run()
+        #expect(mail.recentAsked == 1)
+    }
+
+    @Test func aVIPWrittenWithANameIsStoredAsTheAddress() throws {
+        let assistant = makeAssistant()
+        try assistant.addVIP("Sam <Sam@Work.example>")
+        #expect(assistant.vips == ["sam@work.example"])
+        #expect(throws: Assistant.Failure.alreadyVIP("sam@work.example")) { try assistant.addVIP("sam@work.example") }
+        #expect(throws: Assistant.Failure.notAVIP("x@y.example")) { try assistant.removeVIP("x@y.example") }
+    }
 
     @Test func aVIPBypassesTheBulkRulesButIsStillTriaged() async throws {
         let assistant = makeAssistant()
@@ -250,6 +342,7 @@ final class FakeNotifier: Notifier {
         ("not a VIP", false, 3600.0 as Double?),
         ("VIP, due in three days", true, 3 * 86_400.0 as Double?),
         ("VIP, due the day after tomorrow", true, 2 * 86_400.0 as Double?),
+        ("VIP, overdue since yesterday", true, -12 * 3600.0 as Double?),
         ("VIP, no deadline", true, nil as Double?),
     ])
     func nothingElseNotifies(_ name: String, vip: Bool, dueIn: Double?) async throws {

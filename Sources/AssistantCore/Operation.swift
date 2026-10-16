@@ -136,11 +136,15 @@ public struct Change: Equatable, Sendable, Codable {
     public var digest: [DigestLine]
     /// Everyone Dara emailed in the last 90 days, whole, or nil to leave it alone.
     public var recipients: [String: Date]?
+    /// Threads whose Digest lines are past their day: removed from the store.
+    public var droppedDigest: [String]
 
     public init(
         tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil, suggestions: [Suggestion] = [],
-        mailCursor: String? = nil, digest: [DigestLine] = [], recipients: [String: Date]? = nil
+        mailCursor: String? = nil, digest: [DigestLine] = [], recipients: [String: Date]? = nil,
+        droppedDigest: [String] = []
     ) {
+        self.droppedDigest = droppedDigest
         self.tasks = tasks
         self.projects = projects
         self.settings = settings
@@ -160,7 +164,8 @@ public struct Change: Equatable, Sendable, Codable {
             suggestions: try c.decodeIfPresent([Suggestion].self, forKey: .suggestions) ?? [],
             mailCursor: try c.decodeIfPresent(String.self, forKey: .mailCursor),
             digest: try c.decodeIfPresent([DigestLine].self, forKey: .digest) ?? [],
-            recipients: try c.decodeIfPresent([String: Date].self, forKey: .recipients))
+            recipients: try c.decodeIfPresent([String: Date].self, forKey: .recipients),
+            droppedDigest: try c.decodeIfPresent([String].self, forKey: .droppedDigest) ?? [])
     }
 }
 
@@ -211,7 +216,7 @@ public struct StoreSnapshot: Equatable, Sendable {
     /// Every Suggestion, answered or not, so a thread is never suggested twice.
     public var suggestions: [Suggestion]
     public var mailCursor: String?
-    /// Live Digest lines; cleared ones aren't kept.
+    /// Digest lines, cleared ones included until their day is up.
     public var digest: [DigestLine]
     public var recipients: [String: Date]
 
@@ -240,8 +245,9 @@ public struct StoreSnapshot: Equatable, Sendable {
         if let recipients = change.recipients { self.recipients = recipients }
         for line in change.digest {
             digest.removeAll { $0.threadID == line.threadID }
-            if !line.cleared { digest.append(line) }
+            digest.append(line)
         }
+        digest.removeAll { change.droppedDigest.contains($0.threadID) }
         for suggestion in change.suggestions {
             if let index = suggestions.firstIndex(where: { $0.threadID == suggestion.threadID }) {
                 suggestions[index] = suggestion

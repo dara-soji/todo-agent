@@ -120,7 +120,7 @@ public final class Assistant {
     private(set) var suggestionsByThread: [String: Suggestion]
     /// Where Triage has read the mailbox up to; nil before the first run.
     public private(set) var mailCursor: String?
-    /// Digest lines by thread; cleared ones stay in memory until restart, so a line can't come back.
+    /// Digest lines by thread, cleared ones included until their day is up.
     private(set) var digestByThread: [String: DigestLine]
     /// When Dara last emailed each address, for the last 90 days.
     private(set) var recipients: [String: Date]
@@ -247,7 +247,8 @@ public final class Assistant {
         }
         guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
         let creates = Set(after.tasks.filter { tasksByID[$0.id] == nil }.map(\.id.rawValue)
-            + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue))
+            + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue)
+            + after.suggestions.filter { suggestionsByThread[$0.threadID] == nil }.map(\.id.rawValue))
         let operation = Ask.Operation(
             kind: kind, summary: summary, preview: preview, before: before, after: after, undoes: undoes,
             creates: creates)
@@ -389,7 +390,10 @@ public final class Assistant {
             && operation.before.projects.allSatisfy { project in
                 operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
             }
-            && operation.before.suggestions.allSatisfy { suggestionsByThread[$0.threadID] == $0 }
+            && operation.before.suggestions.allSatisfy { suggestion in
+                operation.creates.contains(suggestion.id.rawValue)
+                    ? suggestionsByThread[suggestion.threadID] == nil : suggestionsByThread[suggestion.threadID] == suggestion
+            }
             && operation.before.digest.allSatisfy { digestByThread[$0.threadID] == $0 }
             && (operation.before.settings.map { $0 == settings } ?? true)
     }
@@ -467,6 +471,7 @@ public final class Assistant {
         if let cursor = change.mailCursor { mailCursor = cursor }
         for suggestion in change.suggestions { suggestionsByThread[suggestion.threadID] = suggestion }
         for line in change.digest { digestByThread[line.threadID] = line }
+        for thread in change.droppedDigest { digestByThread[thread] = nil }
         if let recipients = change.recipients { self.recipients = recipients }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
