@@ -36,6 +36,8 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     /// The helper bringing a Task up to date with its Source (a new reply, a changed row); never
     /// over a title Dara set.
     case sourceUpdate
+    /// Dara taking a sender off "Never from this sender".
+    case forgetNoiseSender
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail

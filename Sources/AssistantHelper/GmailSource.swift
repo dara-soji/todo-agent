@@ -70,7 +70,7 @@ final class GmailSource: MailSource {
     }
 
     /// One history read for every label, so a single cursor covers inbox and sent mail alike.
-    /// Sent mail is best effort: failing to read it never holds up the inbox.
+    /// Failing to read sent mail never holds up the inbox.
     private func sinceHistory(_ cursor: String) async throws -> MailBatch {
         var inbox: [String] = []
         var sent: [String] = []
@@ -97,12 +97,15 @@ final class GmailSource: MailSource {
             page = json["nextPageToken"] as? String
         } while page != nil
         var recipients: [SentMail] = []
+        var sentComplete = true
         do {
             recipients = try await sentMail(sent)
         } catch {
+            // The inbox still goes ahead; the cursor stays so Dara's replies are read next time.
             NSLog("TodoAgent: reading sent mail failed: \(type(of: error))")
+            sentComplete = false
         }
-        return MailBatch(messages: try await messages(inbox), sent: recipients, cursor: latest)
+        return MailBatch(messages: try await messages(inbox), sent: recipients, sentComplete: sentComplete, cursor: latest)
     }
 
     /// Who each sent message went to, when, and on which thread: the To and Cc headers only.

@@ -46,11 +46,14 @@ public struct SentMail: Equatable, Sendable {
 public struct MailBatch: Sendable {
     public let messages: [EmailMessage]
     public let sent: [SentMail]
+    /// False when sent mail couldn't be read: the cursor then stays, so no reply of Dara's is missed.
+    public let sentComplete: Bool
     public let cursor: String
 
-    public init(messages: [EmailMessage], sent: [SentMail] = [], cursor: String) {
+    public init(messages: [EmailMessage], sent: [SentMail] = [], sentComplete: Bool = true, cursor: String) {
         self.messages = messages
         self.sent = sent
+        self.sentComplete = sentComplete
         self.cursor = cursor
     }
 }
@@ -139,6 +142,8 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
 
     public enum Status: String, Sendable, Codable {
         case open, accepted, dismissed
+        /// Settled by Dara replying in Gmail: a later ask on the thread can still become a Suggestion.
+        case replied
         /// Left unanswered for `Assistant.suggestionsExpireAfter`.
         case expired
     }
@@ -156,16 +161,22 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     public var status: Status
     /// The sender, for "Never from this sender".
     public let from: String?
-    /// When the email it is from arrived: a reply from Dara after this settles it.
+    /// When the latest inbox message on its thread arrived: a reply from Dara after this settles it.
     public var messageAt: Date?
     /// The Task it became, once accepted.
     public var task: Task.ID?
+    /// Dara's latest reply on the thread, once handled.
+    public var repliedAt: Date?
+    /// The reply Dara last answered "Not yet" to.
+    public var notYetAt: Date?
 
     init(
         id: ID, threadID: String, title: String, reason: String, source: Task.Source, backLink: String,
         guessedDeadline: Date?, created: Date, status: Status, from: String? = nil, messageAt: Date? = nil,
-        task: Task.ID? = nil
+        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil
     ) {
+        self.repliedAt = repliedAt
+        self.notYetAt = notYetAt
         self.id = id
         self.threadID = threadID
         self.title = title
@@ -191,7 +202,9 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
             created: try c.decode(Date.self, forKey: .created), status: try c.decode(Status.self, forKey: .status),
             from: try c.decodeIfPresent(String.self, forKey: .from),
             messageAt: try c.decodeIfPresent(Date.self, forKey: .messageAt),
-            task: try c.decodeIfPresent(Task.ID.self, forKey: .task))
+            task: try c.decodeIfPresent(Task.ID.self, forKey: .task),
+            repliedAt: try c.decodeIfPresent(Date.self, forKey: .repliedAt),
+            notYetAt: try c.decodeIfPresent(Date.self, forKey: .notYetAt))
     }
 }
 
@@ -246,7 +259,7 @@ public final class TriageRunner {
             }
         }
         assistant.recordRecipients(sent)
-        var handledAll = true
+        var handledAll = batch.sentComplete
         for message in batch.messages {
             // A new message on an accepted Task's thread only marks it: no model call.
             assistant.noteNewMessage(message)
@@ -268,7 +281,8 @@ public final class TriageRunner {
                         notifier?.notify(title: suggestion.title, body: "\(message.from) · \(message.subject)")
                     }
                 case .worthKnowing:
-                    try assistant.addToDigest(message, reason: answer.reason)
+                    // A follow-up on a thread already in hand doesn't also join the Digest.
+                    if !assistant.threadIsInHand(message.threadID) { try assistant.addToDigest(message, reason: answer.reason) }
                 case .noise:
                     break
                 }
@@ -335,25 +349,40 @@ extension Assistant {
     }
 
     /// Whether a new message on this thread goes to Haiku: no Suggestion yet; an open one, to update
-    /// it; or an accepted one whose Task is done, dropped or deleted, for a fresh ask. A dismissed or
-    /// expired thread stays quiet, and a live Task's thread is only marked "new reply".
+    /// it; one settled by Dara's reply, or accepted with its Task done, dropped or deleted, for a fresh
+    /// ask. A dismissed or expired thread stays quiet, and a live Task's thread is only marked
+    /// "new reply".
     func threadIsOpenToTriage(_ thread: String) -> Bool {
         guard let suggestion = suggestionsByThread[thread] else { return true }
         switch suggestion.status {
-        case .open: return true
+        case .open, .replied: return true
         case .dismissed, .expired: return false
         case .accepted: return liveTask(of: suggestion) == nil
         }
     }
 
-    /// The accepted Suggestion's Task, while it is still in play.
+    /// An open Suggestion or a live Task on the thread.
+    func threadIsInHand(_ thread: String) -> Bool {
+        guard let suggestion = suggestionsByThread[thread] else { return false }
+        return suggestion.status == .open || liveTask(of: suggestion) != nil
+    }
+
+    /// The accepted Suggestion's Task, while it is still in play. Suggestions accepted before they
+    /// kept their Task are matched by back-link.
     func liveTask(of suggestion: Suggestion) -> Task? {
-        guard suggestion.status == .accepted, let id = suggestion.task, let task = tasksByID[id], task.deletedAt == nil
-        else { return nil }
+        guard suggestion.status == .accepted else { return nil }
+        let found = suggestion.task.flatMap { tasksByID[$0] }
+            ?? tasksByID.values.filter { $0.backLink == suggestion.backLink }.max { $0.created < $1.created }
+        guard let task = found, task.deletedAt == nil else { return nil }
         switch task.status {
         case .done, .dropped: return nil
         case .open, .committed, .snoozed: return task
         }
+    }
+
+    /// Whether a Suggestion is waiting in an Ask: Triage then leaves it as it was held.
+    private func isHeld(_ suggestion: Suggestion) -> Bool {
+        asks.contains { $0.touches.contains(suggestion.id.rawValue) }
     }
 
     /// Makes the Action email's Suggestion, or brings the thread's open one up to date with the new
@@ -365,6 +394,7 @@ extension Assistant {
         let full = summary.isEmpty ? message.subject : summary
         let title = full.count <= Self.suggestionTitleLimit ? full : full.prefix(Self.suggestionTitleLimit - 1) + "…"
         if var open = suggestionsByThread[message.threadID], open.status == .open {
+            guard !isHeld(open) else { return (open, false) }
             open.title = title
             open.reason = answer.reason
             open.guessedDeadline = answer.deadline ?? open.guessedDeadline
@@ -380,43 +410,68 @@ extension Assistant {
         return (suggestion, true)
     }
 
-    /// An inbox message on a live Task's thread marks the Task "new reply". Archiving, which only
-    /// takes the inbox label away, changes nothing.
+    /// An inbox message on a live Task's thread moves the thread's latest-message time on, which
+    /// marks the Task "new reply" until Dara replies. Archiving, which only takes the inbox label
+    /// away, changes nothing. The Task itself isn't written, so nothing Dara can undo or confirm is.
     func noteNewMessage(_ message: EmailMessage) {
         let labels = Set(message.labels)
         guard labels.contains("INBOX"), !labels.contains("SENT"), !isExcluded(sender: message.from),
-              let suggestion = suggestionsByThread[message.threadID], var task = liveTask(of: suggestion),
-              !task.hasNewReply, message.receivedAt > suggestion.messageAt ?? suggestion.created
+              var suggestion = suggestionsByThread[message.threadID], liveTask(of: suggestion) != nil,
+              message.receivedAt > suggestion.messageAt ?? suggestion.created
         else { return }
-        task.hasNewReply = true
-        try? perform(.sourceUpdate, "New reply on “\(task.title)”", by: .helper, writing: Change(tasks: [task]))
+        suggestion.messageAt = message.receivedAt
+        try? writeUnlogged(Change(suggestions: [suggestion]))
     }
 
-    /// Dara replied on a thread: an open Suggestion from before the reply is settled, quietly; a
-    /// live Task's thread asks "Done?" and is no longer marked "new reply".
+    /// A new message arrived on the Task's email thread since Dara last replied.
+    public func hasNewReply(_ id: Task.ID) -> Bool {
+        guard let task = tasksByID[id], let suggestion = acceptedSuggestion(of: task),
+              let latest = suggestion.messageAt
+        else { return false }
+        return latest > max(task.created, suggestion.repliedAt ?? .distantPast)
+    }
+
+    private func acceptedSuggestion(of task: Task) -> Suggestion? {
+        suggestionsByThread.values.first { $0.status == .accepted && ($0.task == task.id || ($0.task == nil && $0.backLink == task.backLink)) }
+    }
+
+    /// Dara replied on a thread. An open Suggestion from before the reply is settled, quietly. On a
+    /// live Task's thread, a reply after the latest message asks "Done?" and clears "new reply". Each
+    /// reply is handled once, so a retried batch doesn't ask again.
     func daraReplied(_ reply: SentMail) {
-        guard let thread = reply.threadID, let suggestion = suggestionsByThread[thread] else { return }
-        if suggestion.status == .open, reply.at >= suggestion.messageAt ?? suggestion.created {
-            var settled = suggestion
-            settled.status = .dismissed
-            try? writeUnlogged(Change(suggestions: [settled]))
-        } else if var task = liveTask(of: suggestion), reply.at >= task.created {
-            if !doneQuestions.contains(task.id) { doneQuestions.append(task.id) }
-            guard task.hasNewReply else { return }
-            task.hasNewReply = false
-            try? perform(.sourceUpdate, "Replied on “\(task.title)”", by: .helper, writing: Change(tasks: [task]))
+        guard let thread = reply.threadID, var suggestion = suggestionsByThread[thread], !isHeld(suggestion),
+              reply.at > suggestion.repliedAt ?? .distantPast
+        else { return }
+        let latest = suggestion.messageAt ?? suggestion.created
+        if suggestion.status == .open {
+            guard reply.at >= latest else { return }
+            suggestion.status = .replied
+        } else if let task = liveTask(of: suggestion) {
+            guard reply.at >= max(latest, task.created) else { return }
+        } else {
+            return
         }
+        suggestion.repliedAt = reply.at
+        try? writeUnlogged(Change(suggestions: [suggestion]))
     }
 
-    /// "Done?" for each live Task Dara replied on.
+    /// "Done?" for each live Task whose thread Dara replied on, until answered.
     var doneDecisions: [Decision] {
-        doneQuestions.filter { id in tasksByID[id].map { $0.deletedAt == nil && [.open, .committed].contains($0.status) } ?? false }
-            .map { .isItDone($0) }
+        suggestionsByThread.values.compactMap { suggestion -> (Date, Task.ID)? in
+            guard let replied = suggestion.repliedAt, replied > suggestion.notYetAt ?? .distantPast,
+                  let task = liveTask(of: suggestion), [.open, .committed].contains(task.status)
+            else { return nil }
+            return (replied, task.id)
+        }
+        .sorted { $0.0 < $1.0 }
+        .map { .isItDone($0.1) }
     }
 
-    /// "Not yet" to "Done?".
+    /// "Not yet" to "Done?": asked again only after another reply.
     public func notDoneYet(_ id: Task.ID) {
-        doneQuestions.removeAll { $0 == id }
+        guard let task = tasksByID[id], var suggestion = acceptedSuggestion(of: task) else { return }
+        suggestion.notYetAt = suggestion.repliedAt
+        try? writeUnlogged(Change(suggestions: [suggestion]))
     }
 
     /// "Never from this sender" was chosen for this sender.
@@ -426,6 +481,15 @@ extension Assistant {
     }
 
     public var noiseSenders: [String] { settings.noiseSenders }
+
+    /// Takes a sender off "Never from this sender": their mail is triaged again.
+    @discardableResult
+    public func forgetNoiseSender(_ sender: String, by startedBy: StartedBy = .dara) throws -> Outcome {
+        let address = Self.address(in: sender)
+        guard noiseSenders.contains(address) else { throw Failure.notANoiseSender(address) }
+        return try perform(.forgetNoiseSender, "Triaging mail from \(address) again", by: startedBy,
+                           writing: changingSettings { $0.noiseSenders.removeAll { $0 == address } })
+    }
 
     /// A Source's newer title and deadline for a Task, run as the helper. A title Dara set is kept.
     @discardableResult

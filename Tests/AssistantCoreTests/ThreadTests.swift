@@ -146,14 +146,14 @@ import AssistantTestSupport
         mail.messages = [email("Re: Invoice")]
         await runner(assistant).run()
 
-        #expect(assistant.task(task.id)?.hasNewReply == true)
+        #expect(assistant.hasNewReply(task.id))
         #expect(triager.seen.count == calls)
         #expect(assistant.suggestions.isEmpty)
 
         mail.sent = [reply()]
         later()
         await runner(assistant).run()
-        #expect(assistant.task(task.id)?.hasNewReply == false)  // Dara answered it.
+        #expect(!assistant.hasNewReply(task.id))  // Dara answered it.
     }
 
     @Test func aFreshActionOnADoneTasksThreadBecomesANewSuggestion() async throws {
@@ -191,7 +191,7 @@ import AssistantTestSupport
         mail.messages = [email("Invoice", labels: ["CATEGORY_UPDATES"])]  // The same thread, now out of the inbox.
         await runner(assistant).run()
 
-        #expect(assistant.task(task.id)?.hasNewReply == false)
+        #expect(!assistant.hasNewReply(task.id))
         #expect(try store.load().tasks == before.tasks)
         #expect(try store.load().suggestions == before.suggestions)
     }
@@ -208,7 +208,7 @@ import AssistantTestSupport
         mail.messages = [original]  // A retried batch.
         await runner(assistant).run()
 
-        #expect(assistant.task(task.id)?.hasNewReply == false)
+        #expect(!assistant.hasNewReply(task.id))
     }
 
     @Test func aReplyFoundWhileReadingSentMailSettlesTheSuggestion() async throws {
@@ -236,6 +236,170 @@ import AssistantTestSupport
         await triage.run()
 
         #expect(notifier.shown.count == 1)
+    }
+
+    @Test func anOlderReplyInTheSameBatchDoesNotHideANewerMessage() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        later()
+        let replyAt = clock.now
+        later()
+        mail.sent = [SentMail(to: ["sam@work.example"], at: replyAt, threadID: "t1")]
+        mail.messages = [email("Re: Re: Invoice")]  // Sam answered after Dara.
+
+        await runner(assistant).run()
+
+        #expect(assistant.hasNewReply(task.id))
+        #expect(assistant.decisions.isEmpty)
+    }
+
+    @Test func aRetriedBatchDoesNotAskDoneAgainAfterNotYet() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        later()
+        let triage = runner(assistant)
+        let answer = reply()
+        mail.sent = [answer]
+        await triage.run()
+        assistant.notDoneYet(task.id)
+
+        mail.sent = [answer]  // The same reply, handed out again.
+        await runner(makeAssistant()).run()
+
+        #expect(assistant.decisions.isEmpty)
+        #expect(makeAssistant().decisions.isEmpty)
+    }
+
+    @Test func doneIsAskedAgainAfterARestart() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        later()
+        mail.sent = [reply()]
+        await runner(assistant).run()
+
+        #expect(makeAssistant().decisions == [.isItDone(task.id)])
+    }
+
+    @Test func mailOnTheThreadDoesNotBreakAHeldEditOrAnUndo() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        try assistant.tighten(.editTask)
+        guard case .pending = try assistant.editTask(task.id, TaskChanges(title: "Invoice for Sam (paid?)")) else {
+            Issue.record("should ask"); return
+        }
+        later()
+
+        mail.messages = [email("Re: Invoice")]
+        mail.sent = [reply()]
+        await runner(assistant).run()
+
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+        #expect(assistant.task(task.id)?.title == "Invoice for Sam (paid?)")
+        #expect(throws: Never.self) { try assistant.undo(try #require(assistant.operationLog.last).id) }
+    }
+
+    @Test func anAcceptCanBeUndoneAfterMailOnItsThread() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        let accept = try #require(assistant.operationLog.last)
+        later()
+        mail.messages = [email("Re: Invoice")]
+        await runner(assistant).run()
+
+        try assistant.undo(accept.id)
+
+        #expect(assistant.task(task.id)?.deletedAt != nil)
+        #expect(assistant.suggestions.count == 1)
+    }
+
+    @Test func anAcceptHeldAsAnAskSurvivesNewMail() async throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.acceptSuggestion)
+        let suggestion = try await suggested(assistant)
+        try assistant.acceptSuggestion(suggestion.id)
+        later()
+
+        triager.answer = { _ in (.action, "Something else", nil) }
+        mail.messages = [email("Re: Invoice")]
+        mail.sent = [reply()]
+        await runner(assistant).run()
+
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+        #expect(assistant.tasks.map(\.title) == ["Send the invoice"])
+    }
+
+    @Test func aFreshAskAfterDaraRepliedBecomesANewSuggestion() async throws {
+        let assistant = makeAssistant()
+        _ = try await suggested(assistant)
+        later()
+        mail.sent = [reply()]
+        await runner(assistant).run()
+        later()
+
+        triager.answer = { _ in (.action, "Send the receipt by Friday", nil) }
+        mail.messages = [email("Re: Invoice — one more thing")]
+        await runner(assistant).run()
+
+        #expect(assistant.suggestions.map(\.title) == ["Send the receipt by Friday"])
+    }
+
+    @Test func aFailedSentMailReadKeepsTheCursorSoTheReplyIsntMissed() async throws {
+        let assistant = makeAssistant()
+        _ = try await suggested(assistant)
+        let cursor = assistant.mailCursor
+        mail.sentIncomplete = true
+        mail.nextCursor = "h9"
+
+        await runner(assistant).run()
+
+        #expect(assistant.mailCursor == cursor)
+    }
+
+    @Test func aWorthKnowingFollowUpOnAThreadInHandStaysOutOfTheDigest() async throws {
+        let assistant = makeAssistant()
+        _ = try await suggested(assistant)
+        later()
+        triager.answer = { _ in (.worthKnowing, "", nil) }
+
+        mail.messages = [email("Re: Invoice — FYI")]
+        await runner(assistant).run()
+
+        #expect(assistant.digest.isEmpty)
+        #expect(assistant.suggestions.count == 1)
+    }
+
+    @Test func aTaskAcceptedBeforeThreadTrackingIsFoundByItsLink() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        // Strip the Task link, as a Suggestion stored before this release would be.
+        var snapshot = try store.load()
+        let index = try #require(snapshot.suggestions.firstIndex { $0.threadID == "t1" })
+        let legacy = try JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot.suggestions[index])) as! [String: Any]
+        snapshot.suggestions[index] = try JSONDecoder().decode(
+            Suggestion.self, from: JSONSerialization.data(withJSONObject: legacy.filter { $0.key != "task" }))
+        let legacyStore = InMemoryStore(snapshot)
+        let restarted = try Assistant(clock: clock, store: legacyStore, homeDirectory: "/Users/dara")
+        later()
+
+        mail.messages = [email("Re: Invoice")]
+        await TriageRunner(assistant: restarted, mail: mail, triager: triager).run()
+
+        #expect(restarted.suggestions.isEmpty)
+        #expect(restarted.hasNewReply(task.id))
+    }
+
+    @Test func aPromotedLineCanBeNeverFromItsSender() async throws {
+        let assistant = makeAssistant()
+        triager.answer = { _ in (.worthKnowing, "", nil) }
+        mail.messages = [email("FYI", thread: "t2")]
+        await runner(assistant).run()
+        try assistant.promoteDigestLine("t2")
+
+        try assistant.dismissSuggestion(try #require(assistant.suggestions.first).id, neverFromSender: true)
+
+        #expect(assistant.noiseSenders == ["sam@work.example"])
+        try assistant.forgetNoiseSender("Sam <sam@work.example>")
+        #expect(assistant.noiseSenders.isEmpty)
     }
 
     // MARK: Teaching
@@ -289,6 +453,16 @@ import AssistantTestSupport
 
         #expect(changed?.title == "Invoice for Sam (March)")
         #expect(changed?.deadline == clock.now + 86_400)
+    }
+
+    @Test func resendingTheSameTitleDoesNotPinIt() async throws {
+        let assistant = makeAssistant()
+        let task = try await accepted(assistant)
+        try assistant.editTask(task.id, TaskChanges(title: task.title, effort: .some(.small)), by: .claudeCode)
+
+        let changed = try assistant.updateFromSource(task.id, title: "Send the invoice v2", deadline: nil)
+
+        #expect(changed?.title == "Send the invoice v2")
     }
 
     @Test func aSourceUpdateRenamesATaskWhoseTitleCameFromTheSource() async throws {

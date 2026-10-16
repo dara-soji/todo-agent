@@ -17,12 +17,14 @@ final class FakeMailSource: MailSource {
     var readThreads: Set<String> = []
     /// Mail Dara sent, handed out with the next batch.
     var sent: [SentMail] = []
+    /// Sent mail couldn't be read this time.
+    var sentIncomplete = false
 
     func fetchNew(after cursor: String?) async throws -> MailBatch {
         cursorsAskedFor.append(cursor)
         if fails { throw URLError(.notConnectedToInternet) }
         defer { (messages, sent) = ([], []) }
-        return MailBatch(messages: messages, sent: sent, cursor: nextCursor)
+        return MailBatch(messages: messages, sent: sent, sentComplete: !sentIncomplete, cursor: nextCursor)
     }
 
     var unreadFails = false

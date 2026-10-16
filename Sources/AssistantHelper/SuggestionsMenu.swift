@@ -75,8 +75,26 @@ final class SuggestionsMenu: NSObject {
         let add = NSMenuItem(title: "Add a VIP…", action: #selector(addVIP), keyEquivalent: "")
         add.target = self
         menu.addItem(add)
+        if !assistant.noiseSenders.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Never from (sent to Noise)", action: nil, keyEquivalent: "").isEnabled = false
+            for sender in assistant.noiseSenders {
+                let entry = NSMenuItem(title: sender, action: nil, keyEquivalent: "")
+                entry.submenu = NSMenu()
+                let forget = NSMenuItem(title: "Triage again", action: #selector(forgetNoise(_:)), keyEquivalent: "")
+                forget.target = self
+                forget.representedObject = sender
+                entry.submenu?.addItem(forget)
+                menu.addItem(entry)
+            }
+        }
         root.submenu = menu
         return root
+    }
+
+    @objc private func forgetNoise(_ sender: NSMenuItem) {
+        guard let address = sender.representedObject as? String else { return }
+        Attempt.run("Couldn't change it", then: onChange) { try assistant.forgetNoiseSender(address) }
     }
 
     /// "Sam" from "Sam <sam@work.example>", else the address.

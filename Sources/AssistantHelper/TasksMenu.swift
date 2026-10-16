@@ -200,7 +200,7 @@ final class TasksMenu: NSObject {
     }
 
     private func taskItem(_ task: Task) -> NSMenuItem {
-        let item = NSMenuItem(title: Self.label(task), action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: label(task), action: nil, keyEquivalent: "")
         let menu = NSMenu()
         if task.status != .committed { menu.addItem(menuItem("Start", #selector(start(_:)), task.id)) }
         menu.addItem(menuItem("Mark done", #selector(complete(_:)), task.id))
@@ -221,9 +221,9 @@ final class TasksMenu: NSObject {
         return snooze
     }
 
-    private static func label(_ task: Task) -> String {
-        let label = statusLabel(task)
-        return task.hasNewReply ? "\(label) · new reply" : label
+    private func label(_ task: Task) -> String {
+        let label = Self.statusLabel(task)
+        return assistant.hasNewReply(task.id) ? "\(label) · new reply" : label
     }
 
     private static func statusLabel(_ task: Task) -> String {

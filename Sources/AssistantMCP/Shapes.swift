@@ -115,6 +115,7 @@ enum Shapes {
         case let .unknownDigestLine(thread): "No Digest line for thread \(thread)."
         case let .notAVIP(sender): "\(sender) isn't on the VIP list."
         case let .alreadyVIP(sender): "\(sender) is already a VIP."
+        case let .notANoiseSender(sender): "\(sender) isn't on the never-from list."
         }
     }
 }

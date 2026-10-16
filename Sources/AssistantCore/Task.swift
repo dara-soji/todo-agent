@@ -53,17 +53,13 @@ public struct Task: Identifiable, Equatable, Sendable, Codable {
     public var skipCount: Int
     /// Dara (or Claude Code for Dara) set the title: a Source update never overwrites it.
     public var titleSetByDara: Bool
-    /// A new message arrived on its email thread since Dara last replied.
-    public var hasNewReply: Bool
 
     init(
         id: ID, title: String, source: Source, backLink: String?, status: Status, created: Date, deadline: Date?,
         project: Project.ID?, effort: Effort?, kind: Kind?, resumeAfterInterruption: Bool = false,
-        deletedAt: Date? = nil, skippedUntil: Date? = nil, skipCount: Int = 0, titleSetByDara: Bool = false,
-        hasNewReply: Bool = false
+        deletedAt: Date? = nil, skippedUntil: Date? = nil, skipCount: Int = 0, titleSetByDara: Bool = false
     ) {
         self.titleSetByDara = titleSetByDara
-        self.hasNewReply = hasNewReply
         self.id = id
         self.title = title
         self.source = source
@@ -98,8 +94,7 @@ public struct Task: Identifiable, Equatable, Sendable, Codable {
             deletedAt: try c.decodeIfPresent(Date.self, forKey: .deletedAt),
             skippedUntil: try c.decodeIfPresent(Date.self, forKey: .skippedUntil),
             skipCount: try c.decodeIfPresent(Int.self, forKey: .skipCount) ?? 0,
-            titleSetByDara: try c.decodeIfPresent(Bool.self, forKey: .titleSetByDara) ?? false,
-            hasNewReply: try c.decodeIfPresent(Bool.self, forKey: .hasNewReply) ?? false)
+            titleSetByDara: try c.decodeIfPresent(Bool.self, forKey: .titleSetByDara) ?? false)
     }
 }
 
@@ -130,7 +125,7 @@ public struct TaskDraft: Sendable {
 /// An edit to a Task's fields. A nil field is left alone; `.some(nil)` clears an optional one.
 public struct TaskChanges: Sendable {
     func apply(to task: inout Task) {
-        if let title {
+        if let title, title != task.title {
             task.title = title
             task.titleSetByDara = true
         }
