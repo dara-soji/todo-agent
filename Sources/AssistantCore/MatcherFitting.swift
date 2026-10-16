@@ -44,20 +44,27 @@ struct MatcherFitting {
         case .calendarKeyword:
             return false
         case let .sheetID(id):
-            guard let page = page(of: window) else { return false }
-            let prefix = "docs.google.com/spreadsheets/d/\(id)"
-            return page == prefix || page.hasPrefix(prefix + "/")
+            guard let page = page(of: window), page.hasPrefix("docs.google.com/") else { return false }
+            return Self.sheetID(in: page) == id
         }
     }
 
-    /// The id in a Google Sheet's id or URL, or nil if it isn't one.
+    /// Google Sheet ids are long; anything much shorter is a typo or a word.
+    static let shortestSheetID = 20
+
+    /// The id in a Google Sheet's id or URL (`/spreadsheets/d/<id>`, or `/spreadsheets/u/1/d/<id>`
+    /// with more than one account), or nil if it isn't one. A published-to-web link (`/d/e/…`) isn't.
     static func sheetID(in text: String) -> String? {
         var id = text.trimmingCharacters(in: .whitespaces)
-        if let range = id.range(of: "/spreadsheets/d/") {
-            id = String(id[range.upperBound...].prefix { $0 != "/" && $0 != "?" && $0 != "#" })
+        if id.contains("/spreadsheets/") {
+            let pattern = #"/spreadsheets/(?:u/\d+/)?d/([A-Za-z0-9_-]+)"#
+            guard let match = id.range(of: pattern, options: .regularExpression) else { return nil }
+            let path = id[match]
+            id = String(path[path.range(of: "/d/")!.upperBound...])
         }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        guard !id.isEmpty, id.unicodeScalars.allSatisfy({ allowed.contains($0) && $0.isASCII }) else { return nil }
+        guard id.count >= shortestSheetID, id.unicodeScalars.allSatisfy({ allowed.contains($0) && $0.isASCII })
+        else { return nil }
         return id
     }
 

@@ -7,8 +7,8 @@ import Foundation
 @MainActor
 final class SheetsAPI: SheetsSource {
     private static let base = URL(string: "https://sheets.googleapis.com/v4/spreadsheets/")!
-    /// The cells read from each sheet's first tab.
-    static let range = "A1:Z1000"
+    /// The cells read from each sheet's first tab: every row, columns A to Z.
+    static let range = "A:Z"
 
     enum Failure: Error {
         case http(Int)
@@ -16,8 +16,10 @@ final class SheetsAPI: SheetsSource {
 
     private let auth: GoogleAuth
     private let session: URLSession
-    /// Google said no to Sheets: the account was connected before Sheets were asked for.
+    /// Google said the token doesn't cover Sheets: the account was connected before Sheets were asked for.
     private(set) var needsReconnect = false
+    /// Sheets that couldn't be read last time, and why, for the menu.
+    private(set) var problems: [String: String] = [:]
 
     init(auth: GoogleAuth, session: URLSession = .shared) {
         self.auth = auth
@@ -25,7 +27,14 @@ final class SheetsAPI: SheetsSource {
     }
 
     func rows(of sheetID: String) async throws -> [SheetRow] {
-        let json = try await get("\(sheetID)/values/\(Self.range)")
+        let json: [String: Any]
+        do {
+            json = try await get("\(sheetID)/values/\(Self.range)")
+            problems[sheetID] = nil
+        } catch Failure.http(let status) {
+            problems[sheetID] = status == 403 || status == 404 ? "No access" : "Couldn't read (\(status))"
+            throw Failure.http(status)
+        }
         return (json["values"] as? [[Any]] ?? []).enumerated().map { index, cells in
             SheetRow(number: index + 1, cells: cells.map { "\($0)" })
         }
@@ -45,8 +54,11 @@ final class SheetsAPI: SheetsSource {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
-            NSLog("TodoAgent: Sheets \(status)")
-            if status == 403 { needsReconnect = true }
+            let error = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let reasons = ((error?["error"] as? [String: Any])?["details"] as? [[String: Any]] ?? []).compactMap { $0["reason"] as? String }
+            NSLog("TodoAgent: Sheets \(status) \(reasons.joined(separator: ","))")
+            // Only a token without the Sheets scope is fixed by reconnecting; a sheet not shared isn't.
+            if status == 401 || reasons.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") { needsReconnect = true }
             throw Failure.http(status)
         }
         needsReconnect = false

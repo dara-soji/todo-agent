@@ -28,7 +28,8 @@ final class SuggestionsMenu: NSObject {
             menu.addItem(.separator())
         }
         for sheet in assistant.registeredSheets {
-            let entry = NSMenuItem(title: sheet.name, action: nil, keyEquivalent: "")
+            let problem = sheets.api.problems[sheet.id].map { " — \($0)" } ?? ""
+            let entry = NSMenuItem(title: sheet.name + problem, action: nil, keyEquivalent: "")
             entry.submenu = NSMenu()
             let open = NSMenuItem(title: "Open", action: #selector(openSheet(_:)), keyEquivalent: "")
             open.target = self
@@ -64,7 +65,7 @@ final class SuggestionsMenu: NSObject {
     @objc private func registerSheet() {
         let alert = NSAlert()
         alert.messageText = "Register a Sheet"
-        alert.informativeText = "Paste the Google Sheet's URL. Its rows below the header become Suggestions. Read-only; nothing in it is sent to Claude."
+        alert.informativeText = "Paste the Google Sheet's URL. Rows added or edited from now on (below the header row) become Suggestions. Read-only; nothing in it is sent to Claude."
         alert.addButton(withTitle: "Register")
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
@@ -176,8 +177,15 @@ final class SuggestionsMenu: NSObject {
             item.target = self
             return item
         }
-        let root = NSMenuItem(title: "Google: connected (read-only)", action: nil, keyEquivalent: "")
+        let missing = mail.auth.missingScopes
+        let title = missing.isEmpty ? "Google: connected (read-only)" : "Google: \(missing.joined(separator: " and ")) not allowed"
+        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         root.submenu = NSMenu()
+        if !missing.isEmpty {
+            let reconnect = NSMenuItem(title: "Reconnect Google…", action: #selector(connect), keyEquivalent: "")
+            reconnect.target = self
+            root.submenu?.addItem(reconnect)
+        }
         let disconnect = NSMenuItem(title: "Disconnect Google", action: #selector(disconnect), keyEquivalent: "")
         disconnect.target = self
         root.submenu?.addItem(disconnect)
@@ -305,7 +313,7 @@ final class SuggestionsMenu: NSObject {
                 mail.check()
                 sheets.check()
             } catch {
-                Attempt.run("Couldn't connect Gmail", then: onChange) { throw error }
+                Attempt.run("Couldn't connect Google", then: onChange) { throw error }
             }
             onChange()
         }

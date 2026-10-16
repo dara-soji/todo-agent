@@ -38,7 +38,10 @@ public struct MenuBar: Equatable, Sendable {
     /// Longest menu-bar title, ellipsis included.
     static let titleLimit = 15
 
-    init(_ now: Now, project: Project?, branch: String?, committedTask: Task?, next: NextLine, decisionsWaiting: Bool, drifting: Bool) {
+    init(
+        _ now: Now, project: Project?, branch: String?, sheetName: String? = nil, committedTask: Task?, next: NextLine,
+        decisionsWaiting: Bool, drifting: Bool
+    ) {
         self.decisionsWaiting = decisionsWaiting
         self.drifting = drifting
         self.committedTaskTitle = committedTask?.title
@@ -70,7 +73,7 @@ public struct MenuBar: Equatable, Sendable {
             title = Self.shorten(project.shortName.uppercased())
             marker = .project
             nowDetail = project.name
-            evidence = Self.evidence(match, window: now.window, branch: branch)
+            evidence = Self.evidence(match, window: now.window, branch: branch, sheetName: sheetName)
         } else {
             title = "NO PROJECT"
             marker = .noProject
@@ -79,10 +82,10 @@ public struct MenuBar: Equatable, Sendable {
         }
     }
 
-    private static func evidence(_ match: Now.Match, window: ActiveWindow?, branch: String?) -> String {
+    private static func evidence(_ match: Now.Match, window: ActiveWindow?, branch: String?, sheetName: String?) -> String {
         switch match.basis {
         case let .matcher(.sheetID(id)):
-            return "Matched by sheet \(id)"
+            return "Matched by the sheet “\(sheetName ?? id)”"
         case let .matcher(matcher):
             return "Matched by \(matcher.pattern)" + (branch.map { " · \($0)" } ?? "")
         case let .meeting(matcher, event):
@@ -156,6 +159,10 @@ extension Assistant {
         let next = self.next
         return MenuBar(
             now, project: now.project.flatMap(project), branch: now.evidence.flatMap(branch(of:)),
+            sheetName: now.evidence.flatMap { matcher in
+                guard case let .sheetID(id) = matcher else { return nil }
+                return registeredSheets.first { $0.id == id }?.name
+            },
             committedTask: committedTask,
             next: NextLine(next, task: next.task.flatMap(task), project: project, now: clock.now, calendar: calendar),
             decisionsWaiting: !decisions.isEmpty, drifting: isDrifting)

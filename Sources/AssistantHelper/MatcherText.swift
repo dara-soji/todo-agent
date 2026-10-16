@@ -16,7 +16,8 @@ enum MatcherText {
                     return .calendarKeyword(String(entry.dropFirst(calendarPrefix.count)))
                 }
                 if entry.lowercased().hasPrefix(sheetPrefix) { return .sheetID(String(entry.dropFirst(sheetPrefix.count))) }
-                if entry.contains("docs.google.com/spreadsheets/d/") { return .sheetID(entry) }
+                // A sheet's URL is that sheet; a wildcard prefix over all sheets stays a URL prefix.
+                if Matcher.sheetID(in: entry) != nil, entry.contains("docs.google.com/spreadsheets/") { return .sheetID(entry) }
                 return entry.hasPrefix("~") || entry.hasPrefix("/") ? .repoPath(entry) : .urlPrefix(entry)
             }
     }

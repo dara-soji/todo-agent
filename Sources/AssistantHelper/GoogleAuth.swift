@@ -8,7 +8,9 @@ import Network
 /// live in the Keychain; the access token only in memory, refreshed as it runs out.
 @MainActor
 final class GoogleAuth {
-    static let scope = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/spreadsheets.readonly"
+    static let gmailScope = "https://www.googleapis.com/auth/gmail.readonly"
+    static let sheetsScope = "https://www.googleapis.com/auth/spreadsheets.readonly"
+    static let scope = "\(gmailScope) \(sheetsScope)"
     private static let authorizeURL = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     private static let tokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     /// How long the browser sign-in may take.
@@ -40,6 +42,15 @@ final class GoogleAuth {
     private let clientItem = KeychainItem(account: "google-oauth-client")
     private let refreshItem = KeychainItem(account: "google-refresh-token")
     private var accessToken: (value: String, expires: Date)?
+    /// What Dara allowed at the consent screen, from the latest token reply; nil until one arrives.
+    /// Google lets Dara untick a scope, so connected doesn't mean both are allowed.
+    private(set) var grantedScopes: Set<String>?
+
+    /// The requested scopes Dara didn't allow, by name, once known.
+    var missingScopes: [String] {
+        guard let grantedScopes else { return [] }
+        return [(Self.gmailScope, "Gmail"), (Self.sheetsScope, "Sheets")].filter { !grantedScopes.contains($0.0) }.map(\.1)
+    }
     private let session: URLSession
 
     init(session: URLSession = .shared) {
@@ -117,6 +128,7 @@ final class GoogleAuth {
 
     private func keep(_ json: [String: Any]) throws -> String {
         guard let token = json["access_token"] as? String else { throw Failure.token(200, "no_access_token") }
+        if let scope = json["scope"] as? String { grantedScopes = Set(scope.split(separator: " ").map(String.init)) }
         let lifetime = json["expires_in"] as? Double ?? 3600
         accessToken = (token, Date().addingTimeInterval(lifetime))
         return token

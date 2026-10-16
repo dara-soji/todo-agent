@@ -144,6 +144,8 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
         case open, accepted, dismissed
         /// Settled by Dara replying in Gmail: a later ask on the thread can still become a Suggestion.
         case replied
+        /// A sheet row as it was when the sheet was first read: never offered, but an edit to it is.
+        case seen
         /// Left unanswered for `Assistant.suggestionsExpireAfter`.
         case expired
     }
@@ -155,7 +157,8 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     /// Why Triage made it, in one line.
     public var reason: String
     public let source: Task.Source
-    public let backLink: String
+    /// Moves with a sheet row.
+    public var backLink: String
     /// Guessed from the email; shown "(guessed)" and applied only on accept.
     public var guessedDeadline: Date?
     public let created: Date
@@ -172,13 +175,16 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     public var notYetAt: Date?
     /// For a sheet row, its cells as last read: an edit is any change to them.
     public var fingerprint: String?
+    /// For a sheet row, where it is now; nil once the row is gone.
+    public var row: Int?
 
     init(
         id: ID, threadID: String, title: String, reason: String, source: Task.Source, backLink: String,
         guessedDeadline: Date?, created: Date, status: Status, from: String? = nil, messageAt: Date? = nil,
-        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil, fingerprint: String? = nil
+        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil, fingerprint: String? = nil, row: Int? = nil
     ) {
         self.fingerprint = fingerprint
+        self.row = row
         self.repliedAt = repliedAt
         self.notYetAt = notYetAt
         self.id = id
@@ -209,7 +215,8 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
             task: try c.decodeIfPresent(Task.ID.self, forKey: .task),
             repliedAt: try c.decodeIfPresent(Date.self, forKey: .repliedAt),
             notYetAt: try c.decodeIfPresent(Date.self, forKey: .notYetAt),
-            fingerprint: try c.decodeIfPresent(String.self, forKey: .fingerprint))
+            fingerprint: try c.decodeIfPresent(String.self, forKey: .fingerprint),
+            row: try c.decodeIfPresent(Int.self, forKey: .row))
     }
 }
 
@@ -333,9 +340,10 @@ extension Assistant {
         let held = asks.reduce(into: Set<UUID>()) { $0.formUnion($1.touches) }
         return suggestionsByThread.values.filter { $0.status == .open && !held.contains($0.id.rawValue) }
             .sorted { a, b in
-                // Made together (a sheet's rows): in key order, row 2 before row 10.
-                a.created != b.created ? a.created < b.created
-                    : a.threadID.compare(b.threadID, options: .numeric) == .orderedAscending
+                // Made together (a sheet's rows): in row order, then by key.
+                if a.created != b.created { return a.created < b.created }
+                if a.row != b.row { return (a.row ?? 0) < (b.row ?? 0) }
+                return a.threadID < b.threadID
             }
     }
 
@@ -364,7 +372,7 @@ extension Assistant {
     func threadIsOpenToTriage(_ thread: String) -> Bool {
         guard let suggestion = suggestionsByThread[thread] else { return true }
         switch suggestion.status {
-        case .open, .replied: return true
+        case .open, .replied, .seen: return true
         case .dismissed, .expired: return false
         case .accepted: return liveTask(of: suggestion) == nil
         }
@@ -503,12 +511,21 @@ extension Assistant {
     /// A Source's newer title and deadline for a Task, run as the helper. A title Dara set is kept.
     @discardableResult
     public func updateFromSource(_ id: Task.ID, title: String?, deadline: Date?) throws -> Task? {
+        _ = try sourceUpdate(id, title: title, deadline: deadline)
+        return tasksByID[id]
+    }
+
+    /// True once the Task matches its Source: updated now, or nothing to change. False when the
+    /// update is waiting in an Ask.
+    func sourceUpdate(_ id: Task.ID, title: String?, deadline: Date? = nil, backLink: String? = nil) throws -> Bool {
         guard var task = tasksByID[id] else { throw Failure.unknownTask(id) }
         if let title, !task.titleSetByDara, let trimmed = try? Self.nonEmpty(title, else: .emptyTitle) { task.title = trimmed }
         if let deadline { task.deadline = deadline }
-        guard task != tasksByID[id] else { return task }
-        try perform(.sourceUpdate, "Updated “\(task.title)” from its Source", by: .helper, writing: Change(tasks: [task]))
-        return tasksByID[id]
+        if let backLink { task.backLink = backLink }
+        guard task != tasksByID[id] else { return true }
+        let outcome = try perform(.sourceUpdate, "Updated “\(task.title)” from its Source", by: .helper, writing: Change(tasks: [task]))
+        if case .ran = outcome { return true }
+        return false
     }
 
     static func gmailLink(_ threadID: String) -> String {
