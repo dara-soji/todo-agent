@@ -132,6 +132,8 @@ public final class Assistant {
     /// The unmatched window being timed for a sighting.
     var sightingWatch: (matcher: Matcher, since: Date)?
     var dismissedProposals: [Matcher]
+    /// The day bookkeeping writes were last tried, so a failing store isn't retried on every Signal.
+    var bookkeepingTried: [String: Date] = [:]
     /// When each active Project last matched (or was declared).
     var projectsLastSeen: [Project.ID: Date]
     /// The latest note modification read; nil before the first read.
@@ -164,6 +166,18 @@ public final class Assistant {
         self.sightings = Dictionary(snapshot.sightings.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, b in a + b })
         self.dismissedProposals = snapshot.dismissedProposals
         self.projectsLastSeen = snapshot.projectsLastSeen
+        // Sightings past their 30 days are forgotten at launch, written or not since.
+        let kept = keptSightings(sightings)
+        if kept.count != sightings.count || kept.contains(where: { sightings[$0.matcher]?.count != $0.days.count }) {
+            sightings = Dictionary(kept.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, _ in a })
+            try? store.write(Change(sightings: kept), log: [])
+        }
+        // Projects from before last-seen dates were kept start their 30 days now.
+        let unseen = snapshot.projects.filter { $0.status == .active && projectsLastSeen[$0.id] == nil }
+        if !unseen.isEmpty {
+            for project in unseen { projectsLastSeen[project.id] = clock.now }
+            try? store.write(Change(projectsLastSeen: projectsLastSeen), log: [])
+        }
     }
 
     public func receive(_ signal: Signal) {
@@ -395,12 +409,21 @@ public final class Assistant {
     /// Stores the change and its log entries, then applies them. A failed store write changes nothing.
     private func write(_ change: Change, entries: [LogEntry]) throws {
         var change = change
-        // A new Project starts its 30 days now.
-        let declared = change.projects.filter { projectsByID[$0.id] == nil }
-        if !declared.isEmpty {
+        // A Project that becomes active (declared, restored, or brought back by an undo) starts its
+        // 30 days now.
+        let activated = change.projects.filter { $0.status == .active && projectsByID[$0.id]?.status != .active }
+        if !activated.isEmpty {
             var lastSeen = change.projectsLastSeen ?? projectsLastSeen
-            for project in declared { lastSeen[project.id] = lastSeen[project.id] ?? clock.now }
+            for project in activated { lastSeen[project.id] = clock.now }
             change.projectsLastSeen = lastSeen
+        }
+        // A new exclusion or Neutral takes sightings of that work with it.
+        if let new = change.settings, new != settings, !sightings.isEmpty {
+            let previous = settings
+            settings = new
+            let kept = keptSightings(sightings)
+            settings = previous
+            if kept.count != sightings.count { change.sightings = kept }
         }
         // A notes folder no longer Excluded (removed, or an undo) is read again from the start.
         if let new = change.settings, excludedNotesFolders.contains(where: { folder in
@@ -582,7 +605,8 @@ public final class Assistant {
         trackAfterResolve()
         // Bookkeeping writes come last: a write settles Now again, and Now is settled by here.
         noteSeen(match.flatMap { $0.isGuess ? nil : $0.project })
-        trackSighting(placed: placed || match != nil)
+        // A guess isn't a match: a window only guessed at still counts as unmatched work.
+        trackSighting(placed: placed)
     }
 
     /// Writes a closed Now history block.

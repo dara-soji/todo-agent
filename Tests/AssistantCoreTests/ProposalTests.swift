@@ -59,6 +59,20 @@ import AssistantTestSupport
         #expect(assistant.setupProposals(repoPaths: ["/Users/dara/code/todo-agent"]).isEmpty)
     }
 
+    @Test func untickedSetupProposalsAreNeverProposedAgain() throws {
+        let assistant = makeAssistant()
+        let offered = assistant.setupProposals(repoPaths: ["/Users/dara/code/a", "/Users/dara/code/b"])
+
+        try assistant.answerSetupProposals(adding: offered.filter { $0.name == "a" }, from: offered)
+
+        #expect(makeAssistant().setupProposals(repoPaths: ["/Users/dara/code/a", "/Users/dara/code/b"]).isEmpty)
+        for _ in 1...2 {
+            work(assistant, in: "~/code/b")
+            nextDay(assistant)
+        }
+        #expect(proposals(assistant).isEmpty)
+    }
+
     // MARK: Seen on two days
 
     @Test func theSameUnmatchedKeyOnTwoSeparateDaysProposesANewProject() throws {
@@ -131,6 +145,63 @@ import AssistantTestSupport
         #expect(proposal.matcher == .sheetID("1AbC_dEf-123456789xyzABCDEFghijkl"))
     }
 
+    @Test func excludingASiteForgetsItsSightings() throws {
+        let assistant = makeAssistant()
+        for _ in 1...2 {
+            work(assistant, in: "Forum", url: "https://forum.example/r/topic/post")
+            nextDay(assistant)
+        }
+        #expect(proposals(assistant).count == 1)
+
+        try assistant.exclude(.site("forum.example"))
+
+        #expect(proposals(assistant).isEmpty)
+        #expect(!String(describing: try store.load().sightings).contains("forum.example"))
+    }
+
+    @Test func sightingsOlderThanThirtyDaysStopCounting() throws {
+        let assistant = makeAssistant()
+        work(assistant, in: "~/code/side-project")
+        clock.advance(minutes: 31 * 24 * 60)
+        assistant.receive(.userIdle(seconds: 8 * 3600))
+        assistant.receive(.userIdle(seconds: 0))
+        work(assistant, in: "~/code/side-project")
+
+        #expect(proposals(assistant).isEmpty)
+        #expect(try store.load().sightings.first?.days.count == 1)
+    }
+
+    @Test func aProposalLapsesWhenItsFirstDayIsMoreThanThirtyDaysAgo() throws {
+        let assistant = makeAssistant()
+        work(assistant, in: "~/code/side-project")
+        nextDay(assistant)
+        work(assistant, in: "~/code/side-project")
+        #expect(proposals(assistant).count == 1)
+
+        clock.advance(minutes: 29 * 24 * 60 + 23 * 60)  // Running all along, away, no new sightings.
+        assistant.receive(.userIdle(seconds: 8 * 3600))
+
+        #expect(proposals(assistant).isEmpty)
+    }
+
+    @MainActor
+    @Test func aWindowOnlyGuessedAtStillCountsAsUnmatchedWork() async throws {
+        let assistant = makeAssistant()
+        let other = try assistant.declareProject(name: "Other", matchers: [.repoPath("~/code/other")])
+        let model = FakeModel()
+        model.answer = { $0.first }
+        let runner = GuessRunner(assistant: assistant, capturer: FakeCapturer(), model: model)
+        for _ in 1...2 {
+            work(assistant, in: "~/code/side-project")
+            await runner.run()
+            #expect(assistant.now.match?.isGuess == true)
+            work(assistant, in: "~/code/side-project")
+            nextDay(assistant)
+        }
+        #expect(proposals(assistant).map { if case let .newProject(p) = $0 { p.name } else { "" } } == ["side-project"])
+        _ = other
+    }
+
     @Test func briefVisitsDoNotCount() throws {
         let assistant = makeAssistant()
         for _ in 1...3 {
@@ -176,6 +247,35 @@ import AssistantTestSupport
         assistant.receive(.userIdle(seconds: 0))
         try assistant.archiveProject(old.id)
         #expect(assistant.project(old.id)?.status == .archived)
+        #expect(proposals(assistant).isEmpty)
+    }
+
+    @Test func projectsFromBeforeThisStartTheirThirtyDaysAtLaunch() throws {
+        let assistant = makeAssistant()
+        let old = try assistant.declareProject(name: "Old", matchers: [])
+        // As stored before last-seen dates were kept.
+        var snapshot = try store.load()
+        snapshot.projectsLastSeen = [:]
+        let legacy = InMemoryStore(snapshot)
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let upgraded = try Assistant(clock: clock, store: legacy, homeDirectory: "/Users/dara", calendar: utc)
+        #expect(proposals(upgraded).isEmpty)
+
+        clock.advance(minutes: 31 * 24 * 60)
+        upgraded.receive(.userIdle(seconds: 0))
+        #expect(proposals(upgraded) == [.archiveStale(old.id)])
+    }
+
+    @Test func undoingAnArchiveGivesTheProjectAFreshThirtyDays() throws {
+        let assistant = makeAssistant()
+        let old = try assistant.declareProject(name: "Old", matchers: [])
+        clock.advance(minutes: 31 * 24 * 60)
+        try assistant.archiveProject(old.id)
+
+        try assistant.undo(try #require(assistant.operationLog.last).id)
+
+        #expect(assistant.project(old.id)?.status == .active)
         #expect(proposals(assistant).isEmpty)
     }
 

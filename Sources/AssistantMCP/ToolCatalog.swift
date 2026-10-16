@@ -12,6 +12,8 @@ enum ToolCatalog {
         case read
         /// Runs an Operation through the Guardrail; declares that Operation's tier.
         case operation(OperationKind)
+        /// Like `operation`, but asks when `dara_asked` is false: the assistant proposing it.
+        case proposable(OperationKind)
     }
 
     struct Spec {
@@ -39,6 +41,14 @@ enum ToolCatalog {
                      annotations: .init(readOnlyHint: false, destructiveHint: false, openWorldHint: false),
                      outputSchema: spec.output,
                      _meta: Metadata(additionalFields: ["tier": .string(tier(kind).rawValue)]))
+            case let .proposable(kind):
+                Tool(name: spec.name, description: spec.description, inputSchema: spec.input,
+                     annotations: .init(readOnlyHint: false, destructiveHint: false, openWorldHint: false),
+                     outputSchema: spec.output,
+                     _meta: Metadata(additionalFields: [
+                         "tier": .string(tier(kind).rawValue),
+                         "tier_when_proposed": .string(tier(kind) == .never ? Tier.never.rawValue : Tier.ask.rawValue),
+                     ]))
             }
         }
     }
@@ -276,6 +286,8 @@ enum ToolCatalog {
     }
 
     // MARK: Schema pieces
+
+    // Internal, not private, so the tools in ProjectTools.swift share the same pieces.
 
     static let uuid: Value = ["type": "string", "format": "uuid"]
     static let dateTime: Value = ["type": "string", "format": "date-time"]

@@ -30,14 +30,16 @@ extension Assistant {
         try declare(name: name, shortName: shortName, matchers: matchers, by: startedBy, proposed: true)
     }
 
-    private func declare(
+    /// Declares a Project, proposed or asked for, and says what came of it: it may wait in an Ask.
+    @discardableResult
+    public func declare(
         name: String, shortName: String?, matchers: [Matcher], by startedBy: StartedBy, proposed: Bool
     ) throws -> (project: Project, outcome: Outcome) {
         let project = Project(
             name: try Self.nonEmpty(name, else: .emptyName), shortName: shortName,
             matchers: try matchers.map(fitting.normalised))
-        let outcome = try perform(.declareProject, "Declared Project “\(project.name)”", by: startedBy,
-                                  writing: Change(projects: [project]), proposed: proposed)
+        let outcome = try perform(.declareProject, "Declared Project “\(project.name)”" + Self.claim(startedBy, proposed),
+                                  by: startedBy, writing: Change(projects: [project]), proposed: proposed)
         return (project, outcome)
     }
 
@@ -91,10 +93,6 @@ extension Assistant {
 
     @discardableResult
     public func restoreProject(_ id: Project.ID, by startedBy: StartedBy = .dara, proposed: Bool = false) throws -> Outcome {
-        // Restored, it gets a fresh 30 days before archiving is suggested again.
-        var lastSeen = projectsLastSeen
-        lastSeen[id] = clock.now
-        try writeUnlogged(Change(projectsLastSeen: lastSeen))
         return try change(id, .restoreProject, "Restored", by: startedBy, proposed: proposed) { $0.status = .active }
     }
 
@@ -104,8 +102,13 @@ extension Assistant {
     ) throws -> Outcome {
         guard var project = projectsByID[id] else { throw Failure.unknownProject(id) }
         edit(&project)
-        return try perform(kind, "\(verb) Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]),
-                           proposed: proposed)
+        return try perform(kind, "\(verb) Project “\(project.name)”" + Self.claim(startedBy, proposed), by: startedBy,
+                           writing: Change(projects: [project]), proposed: proposed)
+    }
+
+    /// Claude Code says Dara asked for it, which the helper can't check: the log says whose word it is.
+    private static func claim(_ startedBy: StartedBy, _ proposed: Bool) -> String {
+        startedBy == .claudeCode && !proposed ? " (Dara asked, per Claude Code)" : ""
     }
 
     private static func byName(_ a: Project, _ b: Project) -> Bool {

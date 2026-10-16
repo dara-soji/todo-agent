@@ -39,6 +39,11 @@ import Testing
         "remove_matcher": .editProject, "archive_project": .archiveProject, "restore_project": .restoreProject,
     ]
 
+    /// Tools that ask when the assistant proposes the change (dara_asked: false).
+    static let proposable: Set<String> = [
+        "declare_project", "rename_project", "add_matchers", "remove_matcher", "archive_project", "restore_project",
+    ]
+
     @Test func readToolsAreReadOnlyAndOperationToolsDeclareTheirGuardrailTier() async throws {
         let harness = try await Harness.start()
         defer { harness.stop() }
@@ -49,6 +54,8 @@ import Testing
             if let kind = Self.operations[tool.name] {
                 #expect(tool.annotations.readOnlyHint == false, "\(tool.name)")
                 #expect(tool._meta?["tier"] == .string(harness.assistant.tier(for: kind).rawValue), "\(tool.name)")
+                let proposable = Self.proposable.contains(tool.name)
+                #expect(tool._meta?["tier_when_proposed"] == (proposable ? .string("ask") : nil), "\(tool.name)")
             } else {
                 #expect(tool.annotations.readOnlyHint == true, "\(tool.name)")
                 #expect(tool._meta?["tier"] == nil, "\(tool.name)")
@@ -155,6 +162,48 @@ import Testing
         #expect(archive["status"] == .string("pending"))
         #expect(harness.assistant.projects.first?.status == .active)
         #expect(harness.assistant.asks.allSatisfy { $0.startedBy == .claudeCode })
+    }
+
+    @Test func aTightenedDeclareAsksEvenWhenDaraAskedAndTheLogSaysWhoseWordItIs() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+
+        let asked = try await harness.call("declare_project", ["name": "First", "dara_asked": true])
+        #expect(harness.assistant.operationLog.last?.summary == "Declared Project “First” (Dara asked, per Claude Code)")
+        #expect(Set(asked.keys) == ["status", "project", "log_entry", "ask_id", "expires_at"])
+
+        try harness.assistant.tighten(.declareProject)
+        let held = try await harness.call("declare_project", ["name": "Second", "dara_asked": true])
+        #expect(held["status"] == .string("pending"))
+        #expect(held["project"] == .null)
+        #expect(Set(held.keys) == ["status", "project", "log_entry", "ask_id", "expires_at"])
+    }
+
+    @Test(arguments: ["rename_project", "add_matchers", "remove_matcher", "restore_project"])
+    func eachProjectToolAsksWhenProposed(_ tool: String) async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let id = try harness.project(archived: tool == "restore_project")
+        let extra: [String: Value] = switch tool {
+        case "rename_project": ["name": "Renamed"]
+        case "add_matchers": ["matchers": [["kind": "repoPath", "pattern": "~/code/x"]]]
+        case "remove_matcher": ["kind": "repoPath", "pattern": "~/code/x"]
+        default: [:]
+        }
+
+        let result = try await harness.call(tool, extra.merging(["project_id": id, "dara_asked": false]) { a, _ in a })
+
+        #expect(result["status"] == .string("pending"), "\(tool)")
+    }
+
+    @Test func malformedMatchersAreRefused() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let (isError, _) = try await harness.callRaw("declare_project", [
+            "name": "Bad", "matchers": [["kind": "nonsense", "pattern": "x"]], "dara_asked": true,
+        ])
+        #expect(isError)
+        #expect(harness.assistant.projects.isEmpty)
     }
 
     @Test func aProjectToolWithoutDaraAskedIsRefused() async throws {

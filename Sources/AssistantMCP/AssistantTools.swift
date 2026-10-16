@@ -25,7 +25,10 @@ public final class AssistantTools {
         do {
             guard let spec = ToolCatalog.spec(named: name) else { throw ToolError("Unknown tool \(name).") }
             let result = try assistant.inSession(session) { try spec.run(assistant, Arguments(arguments)) }
-            if case .operation = spec.kind { onChange() }
+            switch spec.kind {
+            case .operation, .proposable: onChange()
+            case .read: break
+            }
             return try CallTool.Result(
                 content: [.text(text: Self.json(result), annotations: nil, _meta: nil)], structuredContent: result)
         } catch {

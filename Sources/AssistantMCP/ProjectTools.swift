@@ -67,16 +67,14 @@ extension ToolCatalog {
              description: "Declare a Project with its Matchers (repo path, URL prefix, calendar keyword or Sheet id).",
              input: object(["name": ["type": "string"], "short_name": ["type": "string"], "matchers": matcherSchema,
                             "dara_asked": daraAsked], required: ["name", "dara_asked"]),
-             output: projectResult, kind: .operation(.declareProject)) { assistant, args in
+             output: projectResult, kind: .proposable(.declareProject)) { assistant, args in
             let name = try args.string("name") ?? ""
             let matchers = try matchers(args)
             let short = try args.string("short_name")
-            if try requireDaraAsked(args) {
-                let project = try assistant.declareProject(name: name, shortName: short, matchers: matchers, by: .claudeCode)
-                return projectResult(assistant, .ran(assistant.operationLog.last!.id), project.id)
-            }
-            let proposed = try assistant.declareProjectProposed(name: name, shortName: short, matchers: matchers, by: .claudeCode)
-            return projectResult(assistant, proposed.outcome, nil)
+            let declared = try assistant.declare(
+                name: name, shortName: short, matchers: matchers, by: .claudeCode, proposed: !(try requireDaraAsked(args)))
+            let ran = if case .ran = declared.outcome { true } else { false }
+            return projectResult(assistant, declared.outcome, ran ? declared.project.id : nil)
         },
         projectOperation("rename_project", "Rename a Project.", .editProject,
                          extra: ["name": ["type": "string"], "short_name": ["type": "string"]], required: ["name"]) { assistant, id, args, proposed in
@@ -111,7 +109,7 @@ extension ToolCatalog {
         Spec(name: name, description: description,
              input: object(extra.merging(["project_id": uuid, "dara_asked": daraAsked]) { a, _ in a },
                            required: ["project_id", "dara_asked"] + required),
-             output: projectResult, kind: .operation(kind)) { assistant, args in
+             output: projectResult, kind: .proposable(kind)) { assistant, args in
             guard let id = try args.projectID("project_id") else { throw ToolError("project_id must be a UUID.") }
             let proposed = !(try requireDaraAsked(args))
             return projectResult(assistant, try operation(assistant, id, args, proposed), id)
@@ -124,11 +122,8 @@ extension ToolCatalog {
     }
 
     private static func matchers(_ args: Arguments) throws -> [Matcher] {
-        guard let list = args.values["matchers"], list != Value.null else { return [] }
-        guard let items = list.arrayValue else { throw ToolError("matchers must be a list.") }
-        return try items.map { item in
-            guard let kind = item.objectValue?["kind"]?.stringValue.flatMap(Matcher.Kind.init),
-                  let pattern = item.objectValue?["pattern"]?.stringValue
+        try (args.objects("matchers") ?? []).map { item in
+            guard let kind = item["kind"]?.stringValue.flatMap(Matcher.Kind.init), let pattern = item["pattern"]?.stringValue
             else { throw ToolError("Each Matcher needs a kind and a pattern.") }
             return Matcher(kind: kind, pattern: pattern)
         }

@@ -8,12 +8,11 @@ enum SetupProposals {
     /// Where code folders usually are; the first that exists is scanned.
     static let codeFolders = ["code", "Developer", "Projects", "src", "repos"]
 
-    /// Git repos directly under the code folder, or one level down (code/org/repo).
+    /// Git repos directly under each code folder that exists, or one level down (code/org/repo).
     static func repoPaths() -> [String] {
         let files = FileManager.default
         let home = NSHomeDirectory() as NSString
-        guard let root = codeFolders.map(home.appendingPathComponent).first(where: { files.fileExists(atPath: $0) })
-        else { return [] }
+        let roots = codeFolders.map(home.appendingPathComponent).filter { files.fileExists(atPath: $0) }
         func children(_ path: String) -> [String] {
             ((try? files.contentsOfDirectory(atPath: path)) ?? []).filter { !$0.hasPrefix(".") }
                 .map { (path as NSString).appendingPathComponent($0) }
@@ -21,7 +20,7 @@ enum SetupProposals {
                 .sorted()
         }
         func isRepo(_ path: String) -> Bool { files.fileExists(atPath: (path as NSString).appendingPathComponent(".git")) }
-        return children(root).flatMap { path in isRepo(path) ? [path] : children(path).filter(isRepo) }
+        return roots.flatMap { root in children(root).flatMap { path in isRepo(path) ? [path] : children(path).filter(isRepo) } }
     }
 
     /// The checklist. Returns whether anything was added.
@@ -46,15 +45,28 @@ enum SetupProposals {
         let stack = NSStackView(views: boxes)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.frame = NSRect(x: 0, y: 0, width: 420, height: CGFloat(boxes.count) * 22)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 440, height: min(300, CGFloat(boxes.count) * 22 + 4)))
-        scroll.documentView = stack
-        scroll.hasVerticalScroller = boxes.count > 13
+        stack.spacing = 4
+        let size = stack.fittingSize
+        // Flipped, so a long list opens at its top.
+        let content = FlippedView(frame: NSRect(x: 0, y: 0, width: max(420, size.width), height: size.height))
+        stack.frame = content.bounds
+        content.addSubview(stack)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 440, height: min(300, size.height + 4)))
+        scroll.documentView = content
+        scroll.hasVerticalScroller = size.height > 300
         alert.accessoryView = scroll
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return false }
         let chosen = zip(proposals, boxes).filter { $0.1.state == .on }.map(\.0)
-        Attempt.run("Couldn't add the Projects", then: {}) { try assistant.addProposedProjects(chosen) }
-        return !chosen.isEmpty
+        var added = false
+        Attempt.run("Couldn't add the Projects", then: {}) {
+            try assistant.answerSetupProposals(adding: chosen, from: proposals)
+            added = !chosen.isEmpty
+        }
+        return added
     }
+}
+
+private final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

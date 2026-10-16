@@ -4,7 +4,7 @@ import MCP
 
 /// A tool call's arguments, read with types and clear errors.
 struct Arguments {
-    let values: [String: Value]
+    private let values: [String: Value]
 
     init(_ values: [String: Value]) {
         self.values = values
@@ -56,6 +56,16 @@ struct Arguments {
         return try strings.map { text in
             guard let uuid = UUID(uuidString: text) else { throw ToolError("\(text) in \(key) is not a UUID.") }
             return AssistantCore.Task.ID(uuid)
+        }
+    }
+
+    /// A list of objects, each read as `[String: Value]`.
+    func objects(_ key: String) throws -> [[String: Value]]? {
+        try read(key, "a list of objects") { value in
+            value.arrayValue.flatMap { items in
+                let objects = items.compactMap(\.objectValue)
+                return objects.count == items.count ? objects : nil
+            }
         }
     }
 

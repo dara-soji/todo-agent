@@ -222,7 +222,10 @@ extension SQLiteStore: AssistantStore {
             notesCursor: try readSetting(Self.notesCursorKey).flatMap(Double.init).map(Date.init(timeIntervalSinceReferenceDate:)),
             sightings: try readJSON([Sighting].self, Self.sightingsKey) ?? [],
             dismissedProposals: try readJSON([Matcher].self, Self.dismissedProposalsKey) ?? [],
-            projectsLastSeen: try readJSON([Project.ID: Date].self, Self.projectsLastSeenKey) ?? [:])
+            projectsLastSeen: Dictionary(
+                (try readJSON([String: Date].self, Self.projectsLastSeenKey) ?? [:])
+                    .compactMap { key, date in UUID(uuidString: key).map { (Project.ID($0), date) } },
+                uniquingKeysWith: max))
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -366,7 +369,11 @@ extension SQLiteStore: AssistantStore {
             if change.rereadNotes { try execute("DELETE FROM settings WHERE key = ?;", Self.notesCursorKey) }
             if let sightings = change.sightings { try writeSetting(Self.sightingsKey, try encode(sightings)) }
             if let dismissed = change.dismissedProposals { try writeSetting(Self.dismissedProposalsKey, try encode(dismissed)) }
-            if let lastSeen = change.projectsLastSeen { try writeSetting(Self.projectsLastSeenKey, try encode(lastSeen)) }
+            if let lastSeen = change.projectsLastSeen {
+                // Keyed by the plain id, like the other dictionaries kept here.
+                try writeSetting(Self.projectsLastSeenKey, try encode(Dictionary(
+                    lastSeen.map { ($0.key.rawValue.uuidString, $0.value) }, uniquingKeysWith: max)))
+            }
             if let recipients = change.recipients { try writeSetting(Self.recipientsKey, try encode(recipients)) }
             for line in change.digest {
                 try execute("""
