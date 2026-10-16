@@ -42,7 +42,7 @@ final class BrowserURLReader: @unchecked Sendable {
 
     /// Only touched on `queue`.
     private var deniedAt: [String: Date] = [:]
-    private let queue = DispatchQueue(label: "TodoAgent.BrowserURLReader")
+    private let queue = AppleScriptQueue.shared
 
     func reads(_ bundleID: String) -> Bool {
         Self.scripts[bundleID] != nil

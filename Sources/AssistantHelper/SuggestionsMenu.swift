@@ -9,12 +9,26 @@ final class SuggestionsMenu: NSObject {
     private let assistant: Assistant
     private let mail: MailTriage
     private let sheets: SheetsPolling
+    private let notes: NotesPolling
     var onChange: () -> Void = {}
 
-    init(assistant: Assistant, mail: MailTriage, sheets: SheetsPolling) {
+    init(assistant: Assistant, mail: MailTriage, sheets: SheetsPolling, notes: NotesPolling) {
         self.assistant = assistant
         self.mail = mail
         self.sheets = sheets
+        self.notes = notes
+    }
+
+    /// Notes can't be read: Dara declined Automation for Notes.
+    func notesPermissionItem() -> NSMenuItem? {
+        guard notes.notes.denied else { return nil }
+        let item = NSMenuItem(title: "Allow Automation for Notes to find actions…", action: #selector(openAutomationSettings), keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func openAutomationSettings() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
     }
 
     /// Sheets ▸: the registered sheets, and registering another by its URL.
@@ -95,7 +109,13 @@ final class SuggestionsMenu: NSObject {
             if suggestion.from != nil {
                 actions.addItem(action("Dismiss · never from this sender", #selector(dismissNever(_:)), suggestion))
             }
-            actions.addItem(action("Open in Gmail", #selector(open(_:)), suggestion))
+            let openTitle = switch suggestion.source {
+            case .email: "Open in Gmail"
+            case .sheet: "Open the sheet"
+            case .notes: "Open in Notes"
+            case .byHand, .code: "Open"
+            }
+            actions.addItem(action(openTitle, #selector(open(_:)), suggestion))
             entry.submenu = actions
             menu.addItem(entry)
         }
@@ -270,7 +290,9 @@ final class SuggestionsMenu: NSObject {
     }
 
     @objc private func open(_ sender: NSMenuItem) {
-        guard let box = sender.representedObject as? SuggestionBox, let url = URL(string: box.suggestion.backLink) else { return }
+        guard let box = sender.representedObject as? SuggestionBox else { return }
+        if box.suggestion.source == .notes { return notes.notes.show(box.suggestion.backLink) }
+        guard let url = URL(string: box.suggestion.backLink) else { return }
         NSWorkspace.shared.open(url)
     }
 

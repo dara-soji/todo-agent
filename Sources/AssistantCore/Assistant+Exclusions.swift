@@ -41,8 +41,13 @@ extension Assistant {
         return address.hasSuffix(pattern) || address.hasSuffix("." + pattern.dropFirst())
     }
 
-    public func isExcluded(notesFolder: String) -> Bool {
-        exclusions.contains(.notesFolder(notesFolder))
+    /// A notes folder by name, ignoring case as Notes does; a folder inside an Excluded one is Excluded too.
+    public func isExcluded(notesFolder: String, within parents: [String] = []) -> Bool {
+        let names = Set((parents + [notesFolder]).map { $0.lowercased() })
+        return exclusions.contains { exclusion in
+            if case let .notesFolder(folder) = exclusion { return names.contains(folder.lowercased()) }
+            return false
+        }
     }
 
     /// "Exclude <app/site>" for the window in front: the site in a browser, else the app.
@@ -58,8 +63,9 @@ extension Assistant {
         let exclusion = try exclusion.normalised()
         guard !exclusions.contains(exclusion) else { throw Failure.alreadyExcluded(exclusion) }
         var change = changingSettings { $0.exclusions.append(exclusion) }
-        // Lines already in the Digest from that sender go too.
+        // Lines already in the Digest from that sender go too, and Suggestions from that notes folder.
         change.digest = clearingExcluded(by: [exclusion])
+        change.suggestions = suggestionsInExcluded(exclusion)
         return try perform(.addExclusion, "Added an exclusion", by: startedBy, writing: change)
     }
 

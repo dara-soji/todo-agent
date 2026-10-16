@@ -116,6 +116,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                 : action("Allow Accessibility to read window titles…", #selector(openAccessibilitySettings)),
             CalendarSensor.hasAccess ? nil
                 : action("Allow Calendar access to match meetings…", #selector(openCalendarSettings)),
+            suggestionsMenu.notesPermissionItem(),
         ].compactMap { $0 }
         if !permissions.isEmpty {
             menu.addItem(.separator())

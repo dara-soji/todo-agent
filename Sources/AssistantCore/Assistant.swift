@@ -127,6 +127,8 @@ public final class Assistant {
     public private(set) var mailCursor: String?
     /// Digest lines by thread, cleared ones included until their day is up.
     private(set) var digestByThread: [String: DigestLine]
+    /// The latest note modification read; nil before the first read.
+    private(set) var notesCursor: Date?
     /// When Dara last emailed each address, for the last 90 days.
     private(set) var recipients: [String: Date]
     /// Today's API spend, read from the audit log once a day and added to as calls are made.
@@ -151,6 +153,7 @@ public final class Assistant {
         self.mailCursor = snapshot.mailCursor
         self.digestByThread = Dictionary(snapshot.digest.map { ($0.threadID, $0) }, uniquingKeysWith: { _, last in last })
         self.recipients = snapshot.recipients
+        self.notesCursor = snapshot.notesCursor
     }
 
     public func receive(_ signal: Signal) {
@@ -379,6 +382,13 @@ public final class Assistant {
 
     /// Stores the change and its log entries, then applies them. A failed store write changes nothing.
     private func write(_ change: Change, entries: [LogEntry]) throws {
+        var change = change
+        // A notes folder no longer Excluded (removed, or an undo) is read again from the start.
+        if let new = change.settings, excludedNotesFolders.contains(where: { folder in
+            !new.exclusions.contains(.notesFolder(folder))
+        }) {
+            change.rereadNotes = true
+        }
         try store.write(change, log: entries)
         apply(change)
         if !change.projects.isEmpty { forgetStaleGuesses() }
@@ -485,6 +495,8 @@ public final class Assistant {
         for line in change.digest { digestByThread[line.threadID] = line }
         for thread in change.droppedDigest { digestByThread[thread] = nil }
         if let recipients = change.recipients { self.recipients = recipients }
+        if let cursor = change.notesCursor { notesCursor = cursor }
+        if change.rereadNotes { notesCursor = nil }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }
