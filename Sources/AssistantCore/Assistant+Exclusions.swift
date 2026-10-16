@@ -58,8 +58,9 @@ extension Assistant {
         let exclusion = try exclusion.normalised()
         guard !exclusions.contains(exclusion) else { throw Failure.alreadyExcluded(exclusion) }
         var change = changingSettings { $0.exclusions.append(exclusion) }
-        // Lines already in the Digest from that sender go too.
+        // Lines already in the Digest from that sender go too, and Suggestions from that notes folder.
         change.digest = clearingExcluded(by: [exclusion])
+        change.suggestions = suggestionsInExcluded(exclusion)
         return try perform(.addExclusion, "Added an exclusion", by: startedBy, writing: change)
     }
 

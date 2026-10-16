@@ -154,13 +154,16 @@ public struct Change: Equatable, Sendable, Codable {
     public var recipients: [String: Date]?
     /// Threads whose Digest lines are past their day: removed from the store.
     public var droppedDigest: [String]
+    /// The latest note modification Notes has been read up to, or nil to leave it alone.
+    public var notesCursor: Date?
 
     public init(
         tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil, suggestions: [Suggestion] = [],
         mailCursor: String? = nil, digest: [DigestLine] = [], recipients: [String: Date]? = nil,
-        droppedDigest: [String] = []
+        droppedDigest: [String] = [], notesCursor: Date? = nil
     ) {
         self.droppedDigest = droppedDigest
+        self.notesCursor = notesCursor
         self.tasks = tasks
         self.projects = projects
         self.settings = settings
@@ -181,7 +184,8 @@ public struct Change: Equatable, Sendable, Codable {
             mailCursor: try c.decodeIfPresent(String.self, forKey: .mailCursor),
             digest: try c.decodeIfPresent([DigestLine].self, forKey: .digest) ?? [],
             recipients: try c.decodeIfPresent([String: Date].self, forKey: .recipients),
-            droppedDigest: try c.decodeIfPresent([String].self, forKey: .droppedDigest) ?? [])
+            droppedDigest: try c.decodeIfPresent([String].self, forKey: .droppedDigest) ?? [],
+            notesCursor: try c.decodeIfPresent(Date.self, forKey: .notesCursor))
     }
 }
 
@@ -235,12 +239,14 @@ public struct StoreSnapshot: Equatable, Sendable {
     /// Digest lines, cleared ones included until their day is up.
     public var digest: [DigestLine]
     public var recipients: [String: Date]
+    public var notesCursor: Date?
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
         history: [NowBlock] = [], audit: [APICall] = [], suggestions: [Suggestion] = [], mailCursor: String? = nil,
-        digest: [DigestLine] = [], recipients: [String: Date] = [:]
+        digest: [DigestLine] = [], recipients: [String: Date] = [:], notesCursor: Date? = nil
     ) {
+        self.notesCursor = notesCursor
         self.digest = digest
         self.recipients = recipients
         self.suggestions = suggestions
@@ -259,6 +265,7 @@ public struct StoreSnapshot: Equatable, Sendable {
         if let settings = change.settings { self.settings = settings }
         if let cursor = change.mailCursor { mailCursor = cursor }
         if let recipients = change.recipients { self.recipients = recipients }
+        if let cursor = change.notesCursor { notesCursor = cursor }
         for line in change.digest {
             digest.removeAll { $0.threadID == line.threadID }
             digest.append(line)

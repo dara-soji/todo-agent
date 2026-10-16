@@ -218,7 +218,8 @@ extension SQLiteStore: AssistantStore {
             mailCursor: try readSetting(Self.mailCursorKey),
             digest: readable(DigestLine.self, try rows("SELECT thread_id, json FROM digest;", columns: 2)),
             recipients: try readSetting(Self.recipientsKey)
-                .flatMap { readable([String: Date].self, [[Self.recipientsKey, $0]]).first } ?? [:])
+                .flatMap { readable([String: Date].self, [[Self.recipientsKey, $0]]).first } ?? [:],
+            notesCursor: try readSetting(Self.notesCursorKey).flatMap(Double.init).map(Date.init(timeIntervalSinceReferenceDate:)))
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -258,6 +259,8 @@ extension SQLiteStore: AssistantStore {
 
     /// Gmail's history id, stored as the plain string.
     private static let mailCursorKey = "mail_cursor"
+    /// The latest note modification read, as seconds since the reference date.
+    private static let notesCursorKey = "notes_cursor"
     private static let vipsKey = "vips"
     private static let noiseSendersKey = "noise_senders"
     private static let sheetsKey = "sheets"
@@ -345,6 +348,7 @@ extension SQLiteStore: AssistantStore {
                     """, suggestion.threadID, try encode(suggestion))
             }
             if let cursor = change.mailCursor { try writeSetting(Self.mailCursorKey, cursor) }
+            if let cursor = change.notesCursor { try writeSetting(Self.notesCursorKey, String(cursor.timeIntervalSinceReferenceDate)) }
             if let recipients = change.recipients { try writeSetting(Self.recipientsKey, try encode(recipients)) }
             for line in change.digest {
                 try execute("""
