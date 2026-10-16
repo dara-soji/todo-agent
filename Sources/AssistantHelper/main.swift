@@ -23,6 +23,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var mailTriage: MailTriage?
     private var sheetsPolling: SheetsPolling?
     private var notesPolling: NotesPolling?
+    private var logWindow: OperationLogWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -89,9 +90,37 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let idleSensor = IdleSensor()
         self.idleSensor = idleSensor
         idleSensor.start(delivering: receive)
+        let logWindow = OperationLogWindow(assistant: assistant)
+        logWindow.onChange = changed
+        self.logWindow = logWindow
+        statusItem.onShowLog = { logWindow.show() }
+        let walkthrough = {
+            await SetupWalkthrough.run(assistant, askForAPIKey: { StatusItemController.askForAPIKey() },
+                                       connectGoogle: { suggestionsMenu.connectGoogle() })
+            changed()
+        }
+        statusItem.onRunSetup = { _Concurrency.Task { await walkthrough() } }
+
         // Without the store, the exclude list can't be trusted, so nothing is read at all.
         guard storeProblem == nil else { return }
+        guard !assistant.needsSetup else {
+            // First run: the walkthrough explains each permission before macOS asks for it.
+            _Concurrency.Task { [weak self] in
+                await walkthrough()
+                self?.startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling,
+                                   notesPolling: notesPolling)
+            }
+            return
+        }
         _ = ActiveWindowSensor.requestAccessibility()
+        startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling, notesPolling: notesPolling)
+    }
+
+    /// The window, calendar and Source readers. Only with the exclude list loaded.
+    private func startReading(
+        _ assistant: Assistant, receive: @escaping (Signal) -> Void, mailTriage: MailTriage, sheetsPolling: SheetsPolling,
+        notesPolling: NotesPolling
+    ) {
         let windowSensor = ActiveWindowSensor()
         windowSensor.excludesApp = { assistant.excludesApp($0) }
         windowSensor.excludesAnySite = { assistant.excludesAnySite }

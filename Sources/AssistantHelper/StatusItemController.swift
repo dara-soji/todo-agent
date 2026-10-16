@@ -17,6 +17,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let suggestionsMenu: SuggestionsMenu
     /// Opens the quick-add palette.
     var onAddTask: () -> Void = {}
+    var onShowLog: () -> Void = {}
+    var onRunSetup: () -> Void = {}
     /// Whether Claude Code can connect, for the Connect Claude Code item.
     var claudeCode: ClaudeCodeConnection.State = .starting
     /// Today's API spend, from the audit log.
@@ -110,6 +112,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(exclusionsMenu.listItem())
         menu.addItem(suggestionsMenu.vipsItem())
         menu.addItem(suggestionsMenu.sheetsItem())
+        menu.addItem(action("Operation log…", #selector(showLog)))
 
         let permissions = [
             ActiveWindowSensor.hasAccessibility ? nil
@@ -117,6 +120,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             CalendarSensor.hasAccess ? nil
                 : action("Allow Calendar access to match meetings…", #selector(openCalendarSettings)),
             suggestionsMenu.notesPermissionItem(),
+            CGPreflightScreenCaptureAccess() || ClaudeAPIKey.load() == nil ? nil
+                : action("Allow Screen Recording for window guesses…", #selector(openScreenRecordingSettings)),
         ].compactMap { $0 }
         if !permissions.isEmpty {
             menu.addItem(.separator())
@@ -140,6 +145,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
                             #selector(setAPIKey)))
         if storeProblem == nil { menu.addItem(suggestionsMenu.connectionItem()) }
         menu.addItem(metadata(String(format: "Claude API today: $%.4f", currentSpend())))
+        menu.addItem(action("Run setup again…", #selector(runSetup)))
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
@@ -184,8 +190,20 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return item
     }
 
-    /// Dara types the key into a secure field; it goes straight to the Keychain.
+    @objc private func showLog() {
+        onShowLog()
+    }
+
+    @objc private func runSetup() {
+        onRunSetup()
+    }
+
     @objc private func setAPIKey() {
+        Self.askForAPIKey()
+    }
+
+    /// Dara types the key into a secure field; it goes straight to the Keychain.
+    static func askForAPIKey() {
         let alert = NSAlert()
         alert.messageText = "Claude API key"
         alert.informativeText = "Used for the occasional screenshot guess, breaking ties for Next, and email Triage. Kept in your Keychain."
@@ -221,6 +239,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard Bundle.main.bundleIdentifier != nil, !UserDefaults.standard.bool(forKey: key) else { return }
         UserDefaults.standard.set(true, forKey: key)
         try? SMAppService.mainApp.register()
+    }
+
+    @objc private func openScreenRecordingSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func openCalendarSettings() {

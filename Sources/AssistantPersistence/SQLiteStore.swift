@@ -225,7 +225,8 @@ extension SQLiteStore: AssistantStore {
             projectsLastSeen: Dictionary(
                 (try readJSON([String: Date].self, Self.projectsLastSeenKey) ?? [:])
                     .compactMap { key, date in UUID(uuidString: key).map { (Project.ID($0), date) } },
-                uniquingKeysWith: max))
+                uniquingKeysWith: max),
+            setupDone: try readSetting(Self.setupDoneKey) == "true")
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -257,6 +258,20 @@ extension SQLiteStore: AssistantStore {
                  columns: 1).first.flatMap { Double($0[0]) } ?? 0
     }
 
+    public func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID]) throws {
+        try run("BEGIN IMMEDIATE;")
+        do {
+            try execute("DELETE FROM operation_log WHERE at < ?;", String(cutoffs.log.timeIntervalSinceReferenceDate))
+            try execute("DELETE FROM api_audit WHERE at < ?;", String(cutoffs.audit.timeIntervalSinceReferenceDate))
+            try execute("DELETE FROM now_history WHERE end < ?;", String(cutoffs.history.timeIntervalSinceReferenceDate))
+            for task in tasks { try execute("DELETE FROM tasks WHERE id = ?;", task.rawValue.uuidString) }
+            try run("COMMIT;")
+        } catch {
+            try? run("ROLLBACK;")
+            throw error
+        }
+    }
+
     public func record(_ block: NowBlock) throws {
         try execute("INSERT INTO now_history (project_id, task_id, start, end) VALUES (?, ?, ?, ?);",
                     block.project.rawValue.uuidString, block.committedTask?.rawValue.uuidString,
@@ -271,6 +286,7 @@ extension SQLiteStore: AssistantStore {
     private static let sightingsKey = "sightings"
     private static let dismissedProposalsKey = "dismissed_proposals"
     private static let projectsLastSeenKey = "projects_last_seen"
+    private static let setupDoneKey = "setup_done"
     private static let vipsKey = "vips"
     private static let noiseSendersKey = "noise_senders"
     private static let sheetsKey = "sheets"
@@ -369,6 +385,7 @@ extension SQLiteStore: AssistantStore {
             if change.rereadNotes { try execute("DELETE FROM settings WHERE key = ?;", Self.notesCursorKey) }
             if let sightings = change.sightings { try writeSetting(Self.sightingsKey, try encode(sightings)) }
             if let dismissed = change.dismissedProposals { try writeSetting(Self.dismissedProposalsKey, try encode(dismissed)) }
+            if let done = change.setupDone { try writeSetting(Self.setupDoneKey, done ? "true" : "false") }
             if let lastSeen = change.projectsLastSeen {
                 // Keyed by the plain id, like the other dictionaries kept here.
                 try writeSetting(Self.projectsLastSeenKey, try encode(Dictionary(

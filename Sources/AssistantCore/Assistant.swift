@@ -132,6 +132,10 @@ public final class Assistant {
     /// The unmatched window being timed for a sighting.
     var sightingWatch: (matcher: Matcher, since: Date)?
     var dismissedProposals: [Matcher]
+    /// First-run setup finished.
+    var setupDone: Bool
+    /// The day logs were last pruned.
+    var prunedOn: Date?
     /// The day bookkeeping writes were last tried, so a failing store isn't retried on every Signal.
     var bookkeepingTried: [String: Date] = [:]
     /// When each active Project last matched (or was declared).
@@ -166,6 +170,7 @@ public final class Assistant {
         self.sightings = Dictionary(snapshot.sightings.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, b in a + b })
         self.dismissedProposals = snapshot.dismissedProposals
         self.projectsLastSeen = snapshot.projectsLastSeen
+        self.setupDone = snapshot.setupDone
         // Sightings past their 30 days are forgotten at launch, written or not since.
         let kept = keptSightings(sightings)
         if kept.count != sightings.count || kept.contains(where: { sightings[$0.matcher]?.count != $0.days.count }) {
@@ -204,6 +209,7 @@ public final class Assistant {
         expireDueAsks()
         expireSuggestions()
         expireDigest()
+        if prunedOn != calendar.startOfDay(for: clock.now) { pruneLogs() }
     }
 
     /// The checked-out branch of the repo a repo-path Matcher names, if it is watched.
@@ -530,6 +536,12 @@ public final class Assistant {
         return text
     }
 
+    /// After a prune: purged Tasks and log entries past retention leave memory too.
+    func forget(tasks purged: [Task.ID], logBefore cutoff: Date) {
+        for id in purged { tasksByID[id] = nil }
+        operationLog.removeAll { $0.at < cutoff }
+    }
+
     private func apply(_ change: Change) {
         if let settings = change.settings { self.settings = settings }
         if let cursor = change.mailCursor { mailCursor = cursor }
@@ -542,6 +554,7 @@ public final class Assistant {
         if let sightings = change.sightings { self.sightings = Dictionary(sightings.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, b in a + b }) }
         if let dismissed = change.dismissedProposals { dismissedProposals = dismissed }
         if let lastSeen = change.projectsLastSeen { projectsLastSeen = lastSeen }
+        if let done = change.setupDone { setupDone = done }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }

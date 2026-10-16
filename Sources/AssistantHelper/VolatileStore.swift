@@ -19,6 +19,10 @@ final class VolatileStore: AssistantStore {
         snapshot.history.append(block)
     }
 
+    func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [AssistantCore.Task.ID]) throws {
+        snapshot.prune(cutoffs, purging: tasks)
+    }
+
     func write(_ change: Change, log entries: [LogEntry]) throws {
         snapshot.apply(change)
         snapshot.log += entries

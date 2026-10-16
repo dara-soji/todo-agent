@@ -31,6 +31,11 @@ public final class InMemoryStore: AssistantStore {
         snapshot.history.append(block)
     }
 
+    public func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID]) throws {
+        if failWrites { throw WriteFailed() }
+        snapshot.prune(cutoffs, purging: tasks)
+    }
+
     public func write(_ change: Change, log entries: [LogEntry]) throws {
         if failWrites { throw WriteFailed() }
         snapshot.apply(change)
