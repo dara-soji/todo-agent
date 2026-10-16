@@ -559,6 +559,11 @@ extension Assistant {
                            writing: Change(tasks: [task], suggestions: [suggestion]))
     }
 
+    /// The Task a Suggestion became, once accepted.
+    public func task(acceptedFrom id: Suggestion.ID) -> Task? {
+        suggestionsByThread.values.first { $0.id == id }?.task.flatMap { tasksByID[$0] }
+    }
+
     /// Dismisses a Suggestion. With `neverFromSender`, that sender's mail is Noise from now on;
     /// nothing is learnt otherwise.
     @discardableResult

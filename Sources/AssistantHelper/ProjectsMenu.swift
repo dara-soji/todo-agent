@@ -16,12 +16,18 @@ final class ProjectsMenu: NSObject {
         let root = NSMenuItem(title: "Projects", action: nil, keyEquivalent: "")
         let menu = NSMenu()
         menu.addItem(menuItem("New Project…", #selector(newProject)))
+        menu.addItem(menuItem("Propose Projects from repos and Sheets…", #selector(proposeProjects)))
         if !assistant.projects.isEmpty { menu.addItem(.separator()) }
         for project in assistant.projects {
             menu.addItem(projectItem(project))
         }
         root.submenu = menu
         return root
+    }
+
+    @objc private func proposeProjects() {
+        SetupProposals.offer(assistant)
+        onChange()
     }
 
     private func projectItem(_ project: Project) -> NSMenuItem {

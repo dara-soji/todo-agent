@@ -97,6 +97,7 @@ struct MatcherFitting {
     /// (e.g. github.com/you/repo), or else the deepest folder its title shows.
     func proposedMatcher(for window: ActiveWindow) -> Matcher? {
         if let page = page(of: window) {
+            if page.hasPrefix("docs.google.com/spreadsheets/"), let id = Self.sheetID(in: page) { return .sheetID(id) }
             let segments = page.split(separator: "/").prefix(3)
             return segments.count > 1 ? .urlPrefix(segments.joined(separator: "/")) : nil
         }

@@ -59,6 +59,16 @@ struct Arguments {
         }
     }
 
+    /// A list of objects, each read as `[String: Value]`.
+    func objects(_ key: String) throws -> [[String: Value]]? {
+        try read(key, "a list of objects") { value in
+            value.arrayValue.flatMap { items in
+                let objects = items.compactMap(\.objectValue)
+                return objects.count == items.count ? objects : nil
+            }
+        }
+    }
+
     func projectID(_ key: String) throws -> Project.ID? {
         try uuid(key).map(Project.ID.init)
     }

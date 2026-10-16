@@ -127,6 +127,15 @@ public final class Assistant {
     public private(set) var mailCursor: String?
     /// Digest lines by thread, cleared ones included until their day is up.
     private(set) var digestByThread: [String: DigestLine]
+    /// Unmatched windows seen, by the Matcher that would match them, and on which days.
+    var sightings: [Matcher: [Date]]
+    /// The unmatched window being timed for a sighting.
+    var sightingWatch: (matcher: Matcher, since: Date)?
+    var dismissedProposals: [Matcher]
+    /// The day bookkeeping writes were last tried, so a failing store isn't retried on every Signal.
+    var bookkeepingTried: [String: Date] = [:]
+    /// When each active Project last matched (or was declared).
+    var projectsLastSeen: [Project.ID: Date]
     /// The latest note modification read; nil before the first read.
     private(set) var notesCursor: Date?
     /// When Dara last emailed each address, for the last 90 days.
@@ -154,6 +163,21 @@ public final class Assistant {
         self.digestByThread = Dictionary(snapshot.digest.map { ($0.threadID, $0) }, uniquingKeysWith: { _, last in last })
         self.recipients = snapshot.recipients
         self.notesCursor = snapshot.notesCursor
+        self.sightings = Dictionary(snapshot.sightings.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, b in a + b })
+        self.dismissedProposals = snapshot.dismissedProposals
+        self.projectsLastSeen = snapshot.projectsLastSeen
+        // Sightings past their 30 days are forgotten at launch, written or not since.
+        let kept = keptSightings(sightings)
+        if kept.count != sightings.count || kept.contains(where: { sightings[$0.matcher]?.count != $0.days.count }) {
+            sightings = Dictionary(kept.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, _ in a })
+            try? store.write(Change(sightings: kept), log: [])
+        }
+        // Projects from before last-seen dates were kept start their 30 days now.
+        let unseen = snapshot.projects.filter { $0.status == .active && projectsLastSeen[$0.id] == nil }
+        if !unseen.isEmpty {
+            for project in unseen { projectsLastSeen[project.id] = clock.now }
+            try? store.write(Change(projectsLastSeen: projectsLastSeen), log: [])
+        }
     }
 
     public func receive(_ signal: Signal) {
@@ -238,10 +262,11 @@ public final class Assistant {
     /// Runs an Operation through the Guardrail. Auto: stores what it writes together with its log
     /// entry, then applies it; a failed store write changes nothing. Ask: holds it for Dara to
     /// confirm in the menu bar. Never: refuses.
+    /// With `proposed`, the assistant is proposing it rather than Dara asking: an Auto Operation asks.
     @discardableResult
     func perform(
         _ kind: OperationKind, _ summary: String, by startedBy: StartedBy, writing after: Change,
-        undoes: LogEntry.ID? = nil, preview: [String] = []
+        undoes: LogEntry.ID? = nil, preview: [String] = [], proposed: Bool = false
     ) throws -> Outcome {
         let before = currentVersions(of: after)
         // Scope covers where things are and where they would go, so moving a Task out of a
@@ -253,6 +278,7 @@ public final class Assistant {
            guardrail.tier(for: .removeExclusion) == .ask, tier == .auto {
             tier = .ask
         }
+        if proposed, tier == .auto { tier = .ask }
         guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
         let creates = Set(after.tasks.filter { tasksByID[$0.id] == nil }.map(\.id.rawValue)
             + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue)
@@ -383,6 +409,22 @@ public final class Assistant {
     /// Stores the change and its log entries, then applies them. A failed store write changes nothing.
     private func write(_ change: Change, entries: [LogEntry]) throws {
         var change = change
+        // A Project that becomes active (declared, restored, or brought back by an undo) starts its
+        // 30 days now.
+        let activated = change.projects.filter { $0.status == .active && projectsByID[$0.id]?.status != .active }
+        if !activated.isEmpty {
+            var lastSeen = change.projectsLastSeen ?? projectsLastSeen
+            for project in activated { lastSeen[project.id] = clock.now }
+            change.projectsLastSeen = lastSeen
+        }
+        // A new exclusion or Neutral takes sightings of that work with it.
+        if let new = change.settings, new != settings, !sightings.isEmpty {
+            let previous = settings
+            settings = new
+            let kept = keptSightings(sightings)
+            settings = previous
+            if kept.count != sightings.count { change.sightings = kept }
+        }
         // A notes folder no longer Excluded (removed, or an undo) is read again from the start.
         if let new = change.settings, excludedNotesFolders.contains(where: { folder in
             !new.exclusions.contains(.notesFolder(folder))
@@ -497,6 +539,9 @@ public final class Assistant {
         if let recipients = change.recipients { self.recipients = recipients }
         if let cursor = change.notesCursor { notesCursor = cursor }
         if change.rereadNotes { notesCursor = nil }
+        if let sightings = change.sightings { self.sightings = Dictionary(sightings.map { ($0.matcher, $0.days) }, uniquingKeysWith: { a, b in a + b }) }
+        if let dismissed = change.dismissedProposals { dismissedProposals = dismissed }
+        if let lastSeen = change.projectsLastSeen { projectsLastSeen = lastSeen }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }
@@ -558,6 +603,10 @@ public final class Assistant {
         now = Now(visit: visit, match: match, isAway: isAway, neutral: neutral)
         trackGuessWatch(placed: placed)
         trackAfterResolve()
+        // Bookkeeping writes come last: a write settles Now again, and Now is settled by here.
+        noteSeen(match.flatMap { $0.isGuess ? nil : $0.project })
+        // A guess isn't a match: a window only guessed at still counts as unmatched work.
+        trackSighting(placed: placed)
     }
 
     /// Writes a closed Now history block.

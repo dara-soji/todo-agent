@@ -22,6 +22,8 @@ import Testing
             "get_now", "get_next", "list_tasks", "list_projects", "get_calendar_today", "get_operation_log",
             "add_task", "edit_task", "bulk_edit_tasks", "complete_task", "snooze_task", "drop_task", "delete_task",
             "restore_task", "commit_task", "skip_task", "add_exclusion", "remove_exclusion",
+            "list_suggestions", "get_digest", "accept_suggestion", "dismiss_suggestion",
+            "declare_project", "rename_project", "add_matchers", "remove_matcher", "archive_project", "restore_project",
         ])
     }
 
@@ -32,6 +34,14 @@ import Testing
         "complete_task": .completeTask, "snooze_task": .snoozeTask,
         "drop_task": .dropTask, "delete_task": .deleteTask, "restore_task": .restoreTask, "commit_task": .commitTask,
         "skip_task": .skipTask, "add_exclusion": .addExclusion, "remove_exclusion": .removeExclusion,
+        "accept_suggestion": .acceptSuggestion, "dismiss_suggestion": .dismissSuggestion,
+        "declare_project": .declareProject, "rename_project": .editProject, "add_matchers": .editProject,
+        "remove_matcher": .editProject, "archive_project": .archiveProject, "restore_project": .restoreProject,
+    ]
+
+    /// Tools that ask when the assistant proposes the change (dara_asked: false).
+    static let proposable: Set<String> = [
+        "declare_project", "rename_project", "add_matchers", "remove_matcher", "archive_project", "restore_project",
     ]
 
     @Test func readToolsAreReadOnlyAndOperationToolsDeclareTheirGuardrailTier() async throws {
@@ -44,6 +54,8 @@ import Testing
             if let kind = Self.operations[tool.name] {
                 #expect(tool.annotations.readOnlyHint == false, "\(tool.name)")
                 #expect(tool._meta?["tier"] == .string(harness.assistant.tier(for: kind).rawValue), "\(tool.name)")
+                let proposable = Self.proposable.contains(tool.name)
+                #expect(tool._meta?["tier_when_proposed"] == (proposable ? .string("ask") : nil), "\(tool.name)")
             } else {
                 #expect(tool.annotations.readOnlyHint == true, "\(tool.name)")
                 #expect(tool._meta?["tier"] == nil, "\(tool.name)")
@@ -73,6 +85,17 @@ import Testing
             "bulk_edit_tasks": ["task_ids": [try fresh(), try fresh()], "kind": "deep"],
             "add_exclusion": ["app": "com.example.one"],
             "remove_exclusion": ["app": "com.example.two"],
+            "list_suggestions": [:], "get_digest": [:],
+            "accept_suggestion": ["suggestion_id": try await harness.suggestion("One")],
+            "dismiss_suggestion": ["suggestion_id": try await harness.suggestion("Two")],
+            "declare_project": ["name": "New", "dara_asked": true],
+            "rename_project": ["project_id": try harness.project(), "name": "Renamed", "dara_asked": true],
+            "add_matchers": ["project_id": try harness.project(), "matchers": [["kind": "repoPath", "pattern": "~/code/x"]],
+                             "dara_asked": true],
+            "remove_matcher": ["project_id": try harness.project(), "kind": "repoPath", "pattern": "~/code/none",
+                               "dara_asked": true],
+            "archive_project": ["project_id": try harness.project(), "dara_asked": true],
+            "restore_project": ["project_id": try harness.project(archived: true), "dara_asked": true],
         ]
         try harness.assistant.exclude(.app("com.example.two"))
         #expect(Set(calls.keys) == Set(tools.map(\.name)))
@@ -100,10 +123,116 @@ import Testing
         for name in ["edit_task", "complete_task", "snooze_task", "drop_task", "delete_task", "commit_task", "skip_task"] {
             #expect(required[name] == ["task_id"], "\(name)")
         }
-        for name in ["get_now", "get_next", "list_tasks", "list_projects", "get_calendar_today", "get_operation_log"] {
+        for name in ["get_now", "get_next", "list_tasks", "list_projects", "get_calendar_today", "get_operation_log",
+                     "list_suggestions", "get_digest"] {
             #expect(required[name] == [], "\(name)")
         }
+        #expect(required["accept_suggestion"] == ["suggestion_id"])
+        #expect(required["dismiss_suggestion"] == ["suggestion_id"])
+        #expect(required["declare_project"] == ["name", "dara_asked"])
+        for name in ["archive_project", "restore_project"] {
+            #expect(required[name] == ["project_id", "dara_asked"], "\(name)")
+        }
+        #expect(required["rename_project"] == ["project_id", "dara_asked", "name"])
+        #expect(required["add_matchers"] == ["project_id", "dara_asked", "matchers"])
+        #expect(required["remove_matcher"] == ["project_id", "dara_asked", "kind", "pattern"])
         #expect(tools.allSatisfy { $0.inputSchema.objectValue?["type"] == .string("object") })
+    }
+
+    // MARK: Projects
+
+    @Test func aProjectDaraAskedForRunsAndOneTheAssistantProposesWaitsForDara() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+
+        let asked = try await harness.call("declare_project", [
+            "name": "Course", "matchers": [["kind": "sheetID", "pattern": "1AbC_dEf-123456789xyzABCDEFghijkl"]], "dara_asked": true,
+        ])
+        #expect(asked["status"] == .string("ran"))
+        #expect(asked["project"]?.objectValue?["name"] == .string("Course"))
+        #expect(harness.assistant.projects.map(\.matchers) == [[.sheetID("1AbC_dEf-123456789xyzABCDEFghijkl")]])
+
+        let proposed = try await harness.call("declare_project", ["name": "Side project", "dara_asked": false])
+        #expect(proposed["status"] == .string("pending"))
+        #expect(proposed["ask_id"]?.stringValue != nil)
+        #expect(harness.assistant.projects.count == 1)
+
+        let id = try #require(harness.assistant.projects.first).id.rawValue.uuidString
+        let archive = try await harness.call("archive_project", ["project_id": .string(id), "dara_asked": false])
+        #expect(archive["status"] == .string("pending"))
+        #expect(harness.assistant.projects.first?.status == .active)
+        #expect(harness.assistant.asks.allSatisfy { $0.startedBy == .claudeCode })
+    }
+
+    @Test func aTightenedDeclareAsksEvenWhenDaraAskedAndTheLogSaysWhoseWordItIs() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+
+        let asked = try await harness.call("declare_project", ["name": "First", "dara_asked": true])
+        #expect(harness.assistant.operationLog.last?.summary == "Declared Project “First” (Dara asked, per Claude Code)")
+        #expect(Set(asked.keys) == ["status", "project", "log_entry", "ask_id", "expires_at"])
+
+        try harness.assistant.tighten(.declareProject)
+        let held = try await harness.call("declare_project", ["name": "Second", "dara_asked": true])
+        #expect(held["status"] == .string("pending"))
+        #expect(held["project"] == .null)
+        #expect(Set(held.keys) == ["status", "project", "log_entry", "ask_id", "expires_at"])
+    }
+
+    @Test(arguments: ["rename_project", "add_matchers", "remove_matcher", "restore_project"])
+    func eachProjectToolAsksWhenProposed(_ tool: String) async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let id = try harness.project(archived: tool == "restore_project")
+        let extra: [String: Value] = switch tool {
+        case "rename_project": ["name": "Renamed"]
+        case "add_matchers": ["matchers": [["kind": "repoPath", "pattern": "~/code/x"]]]
+        case "remove_matcher": ["kind": "repoPath", "pattern": "~/code/x"]
+        default: [:]
+        }
+
+        let result = try await harness.call(tool, extra.merging(["project_id": id, "dara_asked": false]) { a, _ in a })
+
+        #expect(result["status"] == .string("pending"), "\(tool)")
+    }
+
+    @Test func malformedMatchersAreRefused() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let (isError, _) = try await harness.callRaw("declare_project", [
+            "name": "Bad", "matchers": [["kind": "nonsense", "pattern": "x"]], "dara_asked": true,
+        ])
+        #expect(isError)
+        #expect(harness.assistant.projects.isEmpty)
+    }
+
+    @Test func aProjectToolWithoutDaraAskedIsRefused() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let (isError, text) = try await harness.callRaw("declare_project", ["name": "Course"])
+        #expect(isError)
+        #expect(text.contains("dara_asked"))
+        #expect(harness.assistant.projects.isEmpty)
+    }
+
+    // MARK: Suggestions
+
+    @Test func suggestionsCanBeListedAcceptedAndDismissed() async throws {
+        let harness = try await Harness.start()
+        defer { harness.stop() }
+        let one = try await harness.suggestion("Book the dentist")
+        let two = try await harness.suggestion("Renew passport")
+
+        let listed = try await harness.call("list_suggestions", [:])
+        #expect(listed["suggestions"]?.arrayValue?.count == 2)
+
+        let accepted = try await harness.call("accept_suggestion", ["suggestion_id": one])
+        #expect(accepted["status"] == .string("ran"))
+        #expect(accepted["task"]?.objectValue?["title"] == .string("Book the dentist"))
+        _ = try await harness.call("dismiss_suggestion", ["suggestion_id": two])
+
+        #expect(harness.assistant.suggestions.isEmpty)
+        #expect(harness.assistant.operationLog.suffix(2).allSatisfy { $0.startedBy == .claudeCode })
     }
 
     // MARK: Operations
@@ -496,6 +625,17 @@ func iso(_ date: Date) -> String {
 }
 
 /// One server over one Assistant, for one test.
+/// A Notes source holding the notes the harness made.
+@MainActor
+final class ContractNotes: NotesSource {
+    var all: [Note] = []
+    var at = Date()
+
+    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> NotesRead {
+        NotesRead(notes: all, present: Set(all.map(\.id)), startedAt: at)
+    }
+}
+
 @MainActor
 struct Harness {
     let clock: FakeClock
@@ -503,6 +643,7 @@ struct Harness {
     let server: AssistantMCPServer
     let token = "test-token-\(UUID().uuidString)"
     let url: URL
+    let notes = ContractNotes()
 
     static func makeAssistant(_ clock: FakeClock) -> Assistant {
         var utc = Calendar(identifier: .gregorian)
@@ -523,6 +664,24 @@ struct Harness {
         server = try AssistantMCPServer(assistant: assistant, token: token, port: 0)
         let port = try await server.start()
         url = URL(string: "http://127.0.0.1:\(port)\(AssistantMCPServer.endpoint)")!
+    }
+
+    /// A fresh open Suggestion, from a note with one open action.
+    func suggestion(_ action: String = "Book the dentist") async throws -> Value {
+        notes.all.append(Note(id: UUID().uuidString, folders: ["Notes"], title: "Note", text: "[ ] \(action)",
+                              modified: clock.now - 60))
+        notes.at = clock.now
+        await NotesRunner(assistant: assistant, notes: notes).run()
+        clock.advance(minutes: 1)
+        let suggestion = try #require(assistant.suggestions.last { $0.title == action })
+        return .string(suggestion.id.rawValue.uuidString)
+    }
+
+    /// A fresh Project, archived when the tool needs one.
+    func project(archived: Bool = false) throws -> Value {
+        let project = try assistant.declareProject(name: "Target \(UUID().uuidString.prefix(4))", matchers: [])
+        if archived { try assistant.archiveProject(project.id) }
+        return .string(project.id.rawValue.uuidString)
     }
 
     func stop() {

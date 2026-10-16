@@ -64,6 +64,22 @@ enum Shapes {
         ]
     }
 
+    static func suggestion(_ suggestion: Suggestion) -> Value {
+        [
+            "id": .string(suggestion.id.rawValue.uuidString),
+            "title": .string(suggestion.title),
+            "reason": .string(suggestion.reason),
+            "source": .string(suggestion.source.rawValue),
+            "back_link": .string(suggestion.backLink),
+            "guessed_deadline": suggestion.guessedDeadline.map(date) ?? .null,
+        ]
+    }
+
+    static func digestLine(_ line: DigestLine) -> Value {
+        ["from": .string(line.from), "subject": .string(line.subject), "reason": .string(line.reason),
+         "back_link": .string(line.backLink), "received_at": date(line.receivedAt)]
+    }
+
     static func event(_ event: CalendarEvent) -> Value {
         ["title": .string(event.title), "start": date(event.start), "end": date(event.end)]
     }
