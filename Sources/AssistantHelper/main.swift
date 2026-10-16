@@ -21,6 +21,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var nudgePanel: NudgePanel?
     private var modelCalls: ModelCalls?
     private var mailTriage: MailTriage?
+    private var sheetsPolling: SheetsPolling?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -31,9 +32,12 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let guardrailsMenu = GuardrailsMenu(assistant: assistant)
         let nowMenu = NowMenu(assistant: assistant)
         let exclusionsMenu = ExclusionsMenu(assistant: assistant)
-        let mailTriage = MailTriage(assistant: assistant)
+        let google = GoogleAuth()
+        let mailTriage = MailTriage(assistant: assistant, auth: google)
         self.mailTriage = mailTriage
-        let suggestionsMenu = SuggestionsMenu(assistant: assistant, mail: mailTriage)
+        let sheetsPolling = SheetsPolling(assistant: assistant, auth: google)
+        self.sheetsPolling = sheetsPolling
+        let suggestionsMenu = SuggestionsMenu(assistant: assistant, mail: mailTriage, sheets: sheetsPolling)
         let statusItem = StatusItemController(
             showing: assistant.menuBar, projectsMenu: projectsMenu, tasksMenu: tasksMenu, guardrailsMenu: guardrailsMenu,
             nowMenu: nowMenu, exclusionsMenu: exclusionsMenu, suggestionsMenu: suggestionsMenu, storeProblem: storeProblem)
@@ -72,6 +76,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         exclusionsMenu.onChange = changed
         suggestionsMenu.onChange = changed
         mailTriage.onChange = changed
+        sheetsPolling.onChange = changed
         setUpQuickAdd(assistant, changed: changed)
         statusItem.onAddTask = { [weak self] in self?.openQuickAdd(assistant) }
         nudgePanel.onSwitchTask = { [weak self] in self?.openQuickAdd(assistant) }
@@ -92,11 +97,13 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         calendarSensor.start(delivering: receive)
         // Like the sensors, only with the exclude list loaded: Excluded senders are never sent.
         mailTriage.start()
+        sheetsPolling.start()
     }
 
     /// Quitting ends every conversation, so pending Asks are logged as expired, not run.
     func applicationWillTerminate(_ notification: Notification) {
         mailTriage?.stop()
+        sheetsPolling?.stop()
         assistant?.expireAllAsks()
         assistant?.closeNowHistory()
     }

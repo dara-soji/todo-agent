@@ -8,11 +8,77 @@ import AssistantCore
 final class SuggestionsMenu: NSObject {
     private let assistant: Assistant
     private let mail: MailTriage
+    private let sheets: SheetsPolling
     var onChange: () -> Void = {}
 
-    init(assistant: Assistant, mail: MailTriage) {
+    init(assistant: Assistant, mail: MailTriage, sheets: SheetsPolling) {
         self.assistant = assistant
         self.mail = mail
+        self.sheets = sheets
+    }
+
+    /// Sheets ▸: the registered sheets, and registering another by its URL.
+    func sheetsItem() -> NSMenuItem {
+        let root = NSMenuItem(title: "Sheets", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        if sheets.api.needsReconnect {
+            let reconnect = NSMenuItem(title: "Reconnect Google to read Sheets…", action: #selector(connect), keyEquivalent: "")
+            reconnect.target = self
+            menu.addItem(reconnect)
+            menu.addItem(.separator())
+        }
+        for sheet in assistant.registeredSheets {
+            let problem = sheets.api.problems[sheet.id].map { " — \($0)" } ?? ""
+            let entry = NSMenuItem(title: sheet.name + problem, action: nil, keyEquivalent: "")
+            entry.submenu = NSMenu()
+            let open = NSMenuItem(title: "Open", action: #selector(openSheet(_:)), keyEquivalent: "")
+            open.target = self
+            open.representedObject = sheet.id
+            entry.submenu?.addItem(open)
+            let stop = NSMenuItem(title: "Stop reading it", action: #selector(unregisterSheet(_:)), keyEquivalent: "")
+            stop.target = self
+            stop.representedObject = sheet.id
+            entry.submenu?.addItem(stop)
+            menu.addItem(entry)
+        }
+        if !assistant.registeredSheets.isEmpty { menu.addItem(.separator()) }
+        let add = NSMenuItem(title: "Register a Sheet…", action: #selector(registerSheet), keyEquivalent: "")
+        add.target = self
+        add.isEnabled = mail.auth.isConnected
+        menu.addItem(add)
+        root.submenu = menu
+        return root
+    }
+
+    @objc private func openSheet(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let url = URL(string: "https://docs.google.com/spreadsheets/d/\(id)/edit") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func unregisterSheet(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        Attempt.run("Couldn't stop reading it", then: onChange) { try assistant.unregisterSheet(id) }
+    }
+
+    /// Dara pastes the sheet's URL; its title names it. Only registered sheets are ever read.
+    @objc private func registerSheet() {
+        let alert = NSAlert()
+        alert.messageText = "Register a Sheet"
+        alert.informativeText = "Paste the Google Sheet's URL. Rows added or edited from now on (below the header row) become Suggestions. Read-only; nothing in it is sent to Claude."
+        alert.addButton(withTitle: "Register")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let text = field.stringValue
+        _Concurrency.Task {
+            let name = await MatcherText.sheetName(text, using: sheets.api)
+            Attempt.run("Couldn't register the sheet", then: onChange) { try assistant.registerSheet(text, name: name) }
+            sheets.check()
+        }
     }
 
     func item() -> NSMenuItem? {
@@ -107,13 +173,20 @@ final class SuggestionsMenu: NSObject {
     /// "Connect Gmail…", or the connected state with a way out.
     func connectionItem() -> NSMenuItem {
         guard mail.auth.isConnected else {
-            let item = NSMenuItem(title: "Connect Gmail…", action: #selector(connect), keyEquivalent: "")
+            let item = NSMenuItem(title: "Connect Google (Gmail, Sheets)…", action: #selector(connect), keyEquivalent: "")
             item.target = self
             return item
         }
-        let root = NSMenuItem(title: "Gmail: connected (read-only)", action: nil, keyEquivalent: "")
+        let missing = mail.auth.missingScopes
+        let title = missing.isEmpty ? "Google: connected (read-only)" : "Google: \(missing.joined(separator: " and ")) not allowed"
+        let root = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         root.submenu = NSMenu()
-        let disconnect = NSMenuItem(title: "Disconnect Gmail", action: #selector(disconnect), keyEquivalent: "")
+        if !missing.isEmpty {
+            let reconnect = NSMenuItem(title: "Reconnect Google…", action: #selector(connect), keyEquivalent: "")
+            reconnect.target = self
+            root.submenu?.addItem(reconnect)
+        }
+        let disconnect = NSMenuItem(title: "Disconnect Google", action: #selector(disconnect), keyEquivalent: "")
         disconnect.target = self
         root.submenu?.addItem(disconnect)
         return root
@@ -205,10 +278,10 @@ final class SuggestionsMenu: NSObject {
     @objc private func connect() {
         if mail.auth.client == nil {
             let alert = NSAlert()
-            alert.messageText = "Connect Gmail"
+            alert.messageText = "Connect Google"
             alert.informativeText = """
                 Paste the client ID and secret of your own Google Cloud OAuth client (type: Desktop app). \
-                TodoAgent asks only to read Gmail. Both are kept in your Keychain.
+                TodoAgent asks only to read Gmail and the Sheets you register. Both are kept in your Keychain.
                 """
             alert.addButton(withTitle: "Continue")
             alert.addButton(withTitle: "Cancel")
@@ -238,8 +311,9 @@ final class SuggestionsMenu: NSObject {
             do {
                 try await mail.auth.signIn()
                 mail.check()
+                sheets.check()
             } catch {
-                Attempt.run("Couldn't connect Gmail", then: onChange) { throw error }
+                Attempt.run("Couldn't connect Google", then: onChange) { throw error }
             }
             onChange()
         }

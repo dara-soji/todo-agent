@@ -11,9 +11,12 @@ public enum Matcher: Hashable, Sendable, Codable {
     /// A word or phrase in the title of a calendar event under way, matched as whole words,
     /// ignoring case. Sets Now only when the foreground window matches no Project.
     case calendarKeyword(String)
+    /// A Google Sheet, by its id (written as the id or the sheet's URL). Matches that sheet open in
+    /// the browser, and beats any URL prefix.
+    case sheetID(String)
 
     public enum Kind: String, Sendable {
-        case repoPath, urlPrefix, calendarKeyword
+        case repoPath, urlPrefix, calendarKeyword, sheetID
     }
 
     public enum Invalid: Error, Equatable {
@@ -23,6 +26,8 @@ public enum Matcher: Hashable, Sendable, Codable {
         case relativePath(String)
         /// A calendar keyword too short to mean anything.
         case shortKeyword(String)
+        /// Not a Google Sheet id or URL.
+        case malformedSheetID(String)
     }
 
     public init(kind: Kind, pattern: String) {
@@ -30,6 +35,7 @@ public enum Matcher: Hashable, Sendable, Codable {
         case .repoPath: self = .repoPath(pattern)
         case .urlPrefix: self = .urlPrefix(pattern)
         case .calendarKeyword: self = .calendarKeyword(pattern)
+        case .sheetID: self = .sheetID(pattern)
         }
     }
 
@@ -38,6 +44,7 @@ public enum Matcher: Hashable, Sendable, Codable {
         case .repoPath: .repoPath
         case .urlPrefix: .urlPrefix
         case .calendarKeyword: .calendarKeyword
+        case .sheetID: .sheetID
         }
     }
 
@@ -47,12 +54,20 @@ public enum Matcher: Hashable, Sendable, Codable {
         case let .repoPath(path): path
         case let .urlPrefix(prefix): prefix
         case let .calendarKeyword(keyword): keyword
+        case let .sheetID(id): id
         }
+    }
+
+    /// The id in a Google Sheet's id or URL, or nil if it isn't one.
+    public static func sheetID(in text: String) -> String? {
+        MatcherFitting.sheetID(in: text)
     }
 
     /// How specific this Matcher is. When several fit one window, the most specific wins:
     /// more literal segments first, then more segments overall (a `*` counts only there).
     var specificity: Specificity {
+        // One whole document: more specific than any prefix of the sheets site.
+        if case .sheetID = self { return Specificity(literal: .max, total: .max) }
         let segments = pattern.split(separator: "/")
         return Specificity(literal: segments.filter { $0 != "*" }.count, total: segments.count)
     }

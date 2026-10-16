@@ -24,6 +24,7 @@ final class GuardrailsMenu: NSObject {
         .acceptSuggestion: "Accept a Suggestion", .dismissSuggestion: "Dismiss a Suggestion",
         .promoteDigestLine: "Make a Digest line a Suggestion", .addVIP: "Add a VIP", .removeVIP: "Remove a VIP",
         .sourceUpdate: "Update a Task from its Source", .forgetNoiseSender: "Triage a never-from sender again",
+        .registerSheet: "Register a Sheet", .unregisterSheet: "Stop reading a Sheet",
     ]
 
     func item() -> NSMenuItem {

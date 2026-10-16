@@ -116,6 +116,9 @@ enum Shapes {
         case let .notAVIP(sender): "\(sender) isn't on the VIP list."
         case let .alreadyVIP(sender): "\(sender) is already a VIP."
         case let .notANoiseSender(sender): "\(sender) isn't on the never-from list."
+        case let .malformedSheet(text): "\(text) isn't a Google Sheet id or URL."
+        case let .alreadyRegisteredSheet(id): "Sheet \(id) is already registered."
+        case let .unknownSheet(id): "Sheet \(id) isn't registered."
         }
     }
 }

@@ -109,6 +109,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(guardrailsMenu.item())
         menu.addItem(exclusionsMenu.listItem())
         menu.addItem(suggestionsMenu.vipsItem())
+        menu.addItem(suggestionsMenu.sheetsItem())
 
         let permissions = [
             ActiveWindowSensor.hasAccessibility ? nil
