@@ -76,6 +76,30 @@ final class TasksMenu: NSObject {
                 item.submenu?.addItem(menuItem("Done", #selector(complete(_:)), id))
                 item.submenu?.addItem(menuItem("Not yet", #selector(notYet(_:)), id))
                 return item
+            case let .newProject(proposal):
+                let days = proposal.days == 1 ? "1 day" : "\(proposal.days) days"
+                let item = NSMenuItem(
+                    title: "New Project: \(proposal.name)? Seen on \(days): \(MatcherText.format(proposal.matcher))",
+                    action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                for (label, selector) in [("Add", #selector(addProposal(_:))), ("Dismiss", #selector(dismissProposal(_:)))] {
+                    let choice = NSMenuItem(title: label, action: selector, keyEquivalent: "")
+                    choice.target = self
+                    choice.representedObject = ProposalBox(proposal)
+                    item.submenu?.addItem(choice)
+                }
+                return item
+            case let .archiveStale(id):
+                guard let project = assistant.project(id) else { return nil }
+                let item = NSMenuItem(title: "No sign of \(project.name) for 30 days: archive it?", action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                for (label, selector) in [("Archive", #selector(archiveStale(_:))), ("Keep", #selector(keepProject(_:)))] {
+                    let choice = NSMenuItem(title: label, action: selector, keyEquivalent: "")
+                    choice.target = self
+                    choice.representedObject = ProjectBox(id)
+                    item.submenu?.addItem(choice)
+                }
+                return item
             }
         }
     }
@@ -245,6 +269,38 @@ final class TasksMenu: NSObject {
     @objc private func skip(_ sender: NSMenuItem) { attempt(sender) { try assistant.skipTask($0) } }
     @objc private func keep(_ sender: NSMenuItem) { attempt(sender) { try assistant.keepTask($0) } }
     @objc private func notYet(_ sender: NSMenuItem) { attempt(sender) { assistant.notDoneYet($0) } }
+
+    private final class ProposalBox: NSObject {
+        let proposal: ProjectProposal
+        init(_ proposal: ProjectProposal) { self.proposal = proposal }
+    }
+
+    private final class ProjectBox: NSObject {
+        let id: Project.ID
+        init(_ id: Project.ID) { self.id = id }
+    }
+
+    @objc private func addProposal(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? ProposalBox else { return }
+        Attempt.run("Couldn't add the Project", then: onChange) { try assistant.addProposedProjects([box.proposal]) }
+    }
+
+    @objc private func dismissProposal(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? ProposalBox else { return }
+        assistant.dismissProposal(box.proposal)
+        onChange()
+    }
+
+    @objc private func archiveStale(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? ProjectBox else { return }
+        Attempt.run("Couldn't archive it", then: onChange) { try assistant.archiveProject(box.id) }
+    }
+
+    @objc private func keepProject(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? ProjectBox else { return }
+        assistant.keepProject(box.id)
+        onChange()
+    }
 
     @objc private func snoozeHour(_ sender: NSMenuItem) {
         attempt(sender) { try assistant.snoozeTask($0, forHours: 1) }

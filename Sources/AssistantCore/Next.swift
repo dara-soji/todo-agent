@@ -47,6 +47,11 @@ public enum Decision: Equatable, Sendable {
     case skippedThreeTimes(Task.ID)
     /// Dara replied on the Task's email thread: "Done?" Done / Not yet.
     case isItDone(Task.ID)
+    /// The same unmatched window on two or more days: "New Project: <name>? Seen on 2 days: <key>"
+    /// Add / Dismiss.
+    case newProject(ProjectProposal)
+    /// No matched Signal for 30 days: "Archive <Project>?" Archive / Keep.
+    case archiveStale(Project.ID)
 }
 
 /// How Next is chosen: an interrupted Task comes back first; otherwise candidates that fit the next

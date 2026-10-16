@@ -157,7 +157,7 @@ extension Assistant {
         let newTask: [Decision] = newTaskTitle.map { [.newTask($0)] } ?? []
         let skipped: [Decision] = tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }
             .map { .skippedThreeTimes($0.id) }
-        return confirms + offerDecision + guessDecision + newTask + skipped + doneDecisions
+        return confirms + offerDecision + guessDecision + newTask + skipped + doneDecisions + projectDecisions
     }
 
     /// Moves the Task to the Deleted list, where it can be restored. A committed Task stops being committed.

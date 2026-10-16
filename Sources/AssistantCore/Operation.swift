@@ -159,12 +159,22 @@ public struct Change: Equatable, Sendable, Codable {
     /// Forget the notes cursor, so the next read looks back from scratch (a notes folder stopped
     /// being Excluded).
     public var rereadNotes: Bool
+    /// Unmatched windows seen, by day, whole; or nil to leave them alone.
+    public var sightings: [Sighting]?
+    /// Proposals Dara dismissed, whole; or nil to leave them alone.
+    public var dismissedProposals: [Matcher]?
+    /// When each Project last matched, whole; or nil to leave it alone.
+    public var projectsLastSeen: [Project.ID: Date]?
 
     public init(
         tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil, suggestions: [Suggestion] = [],
         mailCursor: String? = nil, digest: [DigestLine] = [], recipients: [String: Date]? = nil,
-        droppedDigest: [String] = [], notesCursor: Date? = nil, rereadNotes: Bool = false
+        droppedDigest: [String] = [], notesCursor: Date? = nil, rereadNotes: Bool = false,
+        sightings: [Sighting]? = nil, dismissedProposals: [Matcher]? = nil, projectsLastSeen: [Project.ID: Date]? = nil
     ) {
+        self.sightings = sightings
+        self.dismissedProposals = dismissedProposals
+        self.projectsLastSeen = projectsLastSeen
         self.rereadNotes = rereadNotes
         self.droppedDigest = droppedDigest
         self.notesCursor = notesCursor
@@ -190,7 +200,10 @@ public struct Change: Equatable, Sendable, Codable {
             recipients: try c.decodeIfPresent([String: Date].self, forKey: .recipients),
             droppedDigest: try c.decodeIfPresent([String].self, forKey: .droppedDigest) ?? [],
             notesCursor: try c.decodeIfPresent(Date.self, forKey: .notesCursor),
-            rereadNotes: try c.decodeIfPresent(Bool.self, forKey: .rereadNotes) ?? false)
+            rereadNotes: try c.decodeIfPresent(Bool.self, forKey: .rereadNotes) ?? false,
+            sightings: try c.decodeIfPresent([Sighting].self, forKey: .sightings),
+            dismissedProposals: try c.decodeIfPresent([Matcher].self, forKey: .dismissedProposals),
+            projectsLastSeen: try c.decodeIfPresent([Project.ID: Date].self, forKey: .projectsLastSeen))
     }
 }
 
@@ -245,12 +258,19 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var digest: [DigestLine]
     public var recipients: [String: Date]
     public var notesCursor: Date?
+    public var sightings: [Sighting]
+    public var dismissedProposals: [Matcher]
+    public var projectsLastSeen: [Project.ID: Date]
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
         history: [NowBlock] = [], audit: [APICall] = [], suggestions: [Suggestion] = [], mailCursor: String? = nil,
-        digest: [DigestLine] = [], recipients: [String: Date] = [:], notesCursor: Date? = nil
+        digest: [DigestLine] = [], recipients: [String: Date] = [:], notesCursor: Date? = nil,
+        sightings: [Sighting] = [], dismissedProposals: [Matcher] = [], projectsLastSeen: [Project.ID: Date] = [:]
     ) {
+        self.sightings = sightings
+        self.dismissedProposals = dismissedProposals
+        self.projectsLastSeen = projectsLastSeen
         self.notesCursor = notesCursor
         self.digest = digest
         self.recipients = recipients
@@ -272,6 +292,9 @@ public struct StoreSnapshot: Equatable, Sendable {
         if let recipients = change.recipients { self.recipients = recipients }
         if let cursor = change.notesCursor { notesCursor = cursor }
         if change.rereadNotes { notesCursor = nil }
+        if let sightings = change.sightings { self.sightings = sightings }
+        if let dismissed = change.dismissedProposals { dismissedProposals = dismissed }
+        if let lastSeen = change.projectsLastSeen { projectsLastSeen = lastSeen }
         for line in change.digest {
             digest.removeAll { $0.threadID == line.threadID }
             digest.append(line)

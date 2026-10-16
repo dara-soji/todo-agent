@@ -14,21 +14,39 @@ extension Assistant {
         projects.filter { $0.status == .active }
     }
 
+    /// Declares a Project Dara asked for.
     @discardableResult
     public func declareProject(
         name: String, shortName: String? = nil, matchers: [Matcher], by startedBy: StartedBy = .dara
     ) throws -> Project {
+        try declare(name: name, shortName: shortName, matchers: matchers, by: startedBy, proposed: false).project
+    }
+
+    /// Declares a Project the assistant proposes: it asks Dara first.
+    @discardableResult
+    public func declareProjectProposed(
+        name: String, shortName: String? = nil, matchers: [Matcher], by startedBy: StartedBy
+    ) throws -> (project: Project, outcome: Outcome) {
+        try declare(name: name, shortName: shortName, matchers: matchers, by: startedBy, proposed: true)
+    }
+
+    private func declare(
+        name: String, shortName: String?, matchers: [Matcher], by startedBy: StartedBy, proposed: Bool
+    ) throws -> (project: Project, outcome: Outcome) {
         let project = Project(
             name: try Self.nonEmpty(name, else: .emptyName), shortName: shortName,
             matchers: try matchers.map(fitting.normalised))
-        try perform(.declareProject, "Declared Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]))
-        return project
+        let outcome = try perform(.declareProject, "Declared Project “\(project.name)”", by: startedBy,
+                                  writing: Change(projects: [project]), proposed: proposed)
+        return (project, outcome)
     }
 
     @discardableResult
-    public func renameProject(_ id: Project.ID, name: String, shortName: String? = nil, by startedBy: StartedBy = .dara) throws -> Outcome {
+    public func renameProject(
+        _ id: Project.ID, name: String, shortName: String? = nil, by startedBy: StartedBy = .dara, proposed: Bool = false
+    ) throws -> Outcome {
         let name = try Self.nonEmpty(name, else: .emptyName)
-        return try change(id, .editProject, "Renamed", by: startedBy) {
+        return try change(id, .editProject, "Renamed", by: startedBy, proposed: proposed) {
             $0.name = name
             $0.shortName = shortName ?? name
         }
@@ -39,11 +57,16 @@ extension Assistant {
         try addMatchers([matcher], to: id, by: startedBy)
     }
 
+    /// The Operations below take `proposed`: true when the assistant proposes the change rather than
+    /// Dara asking for it, which makes it ask first.
+
     /// Adds every Matcher, or none if any is invalid.
     @discardableResult
-    public func addMatchers(_ matchers: [Matcher], to id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+    public func addMatchers(
+        _ matchers: [Matcher], to id: Project.ID, by startedBy: StartedBy = .dara, proposed: Bool = false
+    ) throws -> Outcome {
         let matchers = try matchers.map(fitting.normalised)
-        return try change(id, .editProject, "Added Matchers to", by: startedBy) { project in
+        return try change(id, .editProject, "Added Matchers to", by: startedBy, proposed: proposed) { project in
             for matcher in matchers where !project.matchers.contains(matcher) {
                 project.matchers.append(matcher)
             }
@@ -51,28 +74,38 @@ extension Assistant {
     }
 
     @discardableResult
-    public func removeMatcher(_ matcher: Matcher, from id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
+    public func removeMatcher(
+        _ matcher: Matcher, from id: Project.ID, by startedBy: StartedBy = .dara, proposed: Bool = false
+    ) throws -> Outcome {
         let matcher = (try? fitting.normalised(matcher)) ?? matcher
-        return try change(id, .editProject, "Removed a Matcher from", by: startedBy) { $0.matchers.removeAll { $0 == matcher } }
+        return try change(id, .editProject, "Removed a Matcher from", by: startedBy, proposed: proposed) {
+            $0.matchers.removeAll { $0 == matcher }
+        }
     }
 
     /// An archived Project matches nothing until it is restored.
     @discardableResult
-    public func archiveProject(_ id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
-        return try change(id, .archiveProject, "Archived", by: startedBy) { $0.status = .archived }
+    public func archiveProject(_ id: Project.ID, by startedBy: StartedBy = .dara, proposed: Bool = false) throws -> Outcome {
+        return try change(id, .archiveProject, "Archived", by: startedBy, proposed: proposed) { $0.status = .archived }
     }
 
     @discardableResult
-    public func restoreProject(_ id: Project.ID, by startedBy: StartedBy = .dara) throws -> Outcome {
-        return try change(id, .restoreProject, "Restored", by: startedBy) { $0.status = .active }
+    public func restoreProject(_ id: Project.ID, by startedBy: StartedBy = .dara, proposed: Bool = false) throws -> Outcome {
+        // Restored, it gets a fresh 30 days before archiving is suggested again.
+        var lastSeen = projectsLastSeen
+        lastSeen[id] = clock.now
+        try writeUnlogged(Change(projectsLastSeen: lastSeen))
+        return try change(id, .restoreProject, "Restored", by: startedBy, proposed: proposed) { $0.status = .active }
     }
 
     private func change(
-        _ id: Project.ID, _ kind: OperationKind, _ verb: String, by startedBy: StartedBy, _ edit: (inout Project) -> Void
+        _ id: Project.ID, _ kind: OperationKind, _ verb: String, by startedBy: StartedBy, proposed: Bool = false,
+        _ edit: (inout Project) -> Void
     ) throws -> Outcome {
         guard var project = projectsByID[id] else { throw Failure.unknownProject(id) }
         edit(&project)
-        return try perform(kind, "\(verb) Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]))
+        return try perform(kind, "\(verb) Project “\(project.name)”", by: startedBy, writing: Change(projects: [project]),
+                           proposed: proposed)
     }
 
     private static func byName(_ a: Project, _ b: Project) -> Bool {

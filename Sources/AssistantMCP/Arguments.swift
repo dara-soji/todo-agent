@@ -4,7 +4,7 @@ import MCP
 
 /// A tool call's arguments, read with types and clear errors.
 struct Arguments {
-    private let values: [String: Value]
+    let values: [String: Value]
 
     init(_ values: [String: Value]) {
         self.values = values

@@ -43,7 +43,7 @@ enum ToolCatalog {
         }
     }
 
-    static let specs: [Spec] = reads + operations
+    static let specs: [Spec] = reads + operations + suggestionTools + projectTools
 
     // MARK: Reads
 
@@ -259,7 +259,7 @@ enum ToolCatalog {
 
     /// What came of the Operation: if it ran, the Task as it now is and the log entry it wrote; if it
     /// waits for Dara, the Ask and when it expires, with the Task unchanged.
-    private static func result(_ assistant: Assistant, _ outcome: Outcome?, task id: AssistantCore.Task.ID?) -> Value {
+    static func result(_ assistant: Assistant, _ outcome: Outcome?, task id: AssistantCore.Task.ID?) -> Value {
         let task = id.flatMap(assistant.task).map(Shapes.task) ?? .null
         switch outcome {
         case let .pending(askID)?:
@@ -277,29 +277,29 @@ enum ToolCatalog {
 
     // MARK: Schema pieces
 
-    private static let uuid: Value = ["type": "string", "format": "uuid"]
-    private static let dateTime: Value = ["type": "string", "format": "date-time"]
-    private static let boolean: Value = ["type": "boolean"]
-    private static let list: Value = ["type": "array", "items": ["type": "object"]]
-    private static let nullableObject: Value = ["type": ["object", "null"]]
-    private static let nullableString: Value = ["type": ["string", "null"]]
+    static let uuid: Value = ["type": "string", "format": "uuid"]
+    static let dateTime: Value = ["type": "string", "format": "date-time"]
+    static let boolean: Value = ["type": "boolean"]
+    static let list: Value = ["type": "array", "items": ["type": "object"]]
+    static let nullableObject: Value = ["type": ["object", "null"]]
+    static let nullableString: Value = ["type": ["string", "null"]]
     /// Every Operation tool returns this shape: "ran", or "pending" until Dara confirms in the menu bar.
-    private static let operationResult = output([
+    static let operationResult = output([
         "status": enumeration(["ran", "pending"]), "task": nullableObject, "log_entry": nullableObject,
         "ask_id": nullableString, "expires_at": nullableString,
     ])
 
-    private static func object(_ properties: [String: Value], required: [String] = []) -> Value {
+    static func object(_ properties: [String: Value], required: [String] = []) -> Value {
         ["type": "object", "properties": .object(properties), "required": .array(required.map(Value.string)),
          "additionalProperties": false]
     }
 
     /// An output schema: every key is always present.
-    private static func output(_ properties: [String: Value]) -> Value {
+    static func output(_ properties: [String: Value]) -> Value {
         object(properties, required: properties.keys.sorted())
     }
 
-    private static func enumeration(_ values: [String]) -> Value {
+    static func enumeration(_ values: [String]) -> Value {
         ["type": "string", "enum": .array(values.map(Value.string))]
     }
 

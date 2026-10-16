@@ -219,7 +219,10 @@ extension SQLiteStore: AssistantStore {
             digest: readable(DigestLine.self, try rows("SELECT thread_id, json FROM digest;", columns: 2)),
             recipients: try readSetting(Self.recipientsKey)
                 .flatMap { readable([String: Date].self, [[Self.recipientsKey, $0]]).first } ?? [:],
-            notesCursor: try readSetting(Self.notesCursorKey).flatMap(Double.init).map(Date.init(timeIntervalSinceReferenceDate:)))
+            notesCursor: try readSetting(Self.notesCursorKey).flatMap(Double.init).map(Date.init(timeIntervalSinceReferenceDate:)),
+            sightings: try readJSON([Sighting].self, Self.sightingsKey) ?? [],
+            dismissedProposals: try readJSON([Matcher].self, Self.dismissedProposalsKey) ?? [],
+            projectsLastSeen: try readJSON([Project.ID: Date].self, Self.projectsLastSeenKey) ?? [:])
         // Now history isn't loaded at launch: nothing reads it until the history viewer (ticket 19).
     }
 
@@ -261,6 +264,10 @@ extension SQLiteStore: AssistantStore {
     private static let mailCursorKey = "mail_cursor"
     /// The latest note modification read, as seconds since the reference date.
     private static let notesCursorKey = "notes_cursor"
+    /// Unmatched windows' Matchers (a repo path, a site's first path, a sheet id) and the days seen: no titles.
+    private static let sightingsKey = "sightings"
+    private static let dismissedProposalsKey = "dismissed_proposals"
+    private static let projectsLastSeenKey = "projects_last_seen"
     private static let vipsKey = "vips"
     private static let noiseSendersKey = "noise_senders"
     private static let sheetsKey = "sheets"
@@ -304,6 +311,13 @@ extension SQLiteStore: AssistantStore {
     private func loadSheets() throws -> [RegisteredSheet] {
         guard let json = try readSetting(Self.sheetsKey) else { return [] }
         return readable([RegisteredSheet].self, [[Self.sheetsKey, json]]).first ?? []
+    }
+
+    /// A JSON setting, or nil if absent. Unreadable, it is logged and skipped: these are bookkeeping
+    /// that only make the assistant offer a little more or a little later.
+    private func readJSON<T: Decodable>(_ type: T.Type, _ key: String) throws -> T? {
+        guard let json = try readSetting(key) else { return nil }
+        return readable(type, [[key, json]]).first
     }
 
     private func readSetting(_ key: String) throws -> String? {
@@ -350,6 +364,9 @@ extension SQLiteStore: AssistantStore {
             if let cursor = change.mailCursor { try writeSetting(Self.mailCursorKey, cursor) }
             if let cursor = change.notesCursor { try writeSetting(Self.notesCursorKey, String(cursor.timeIntervalSinceReferenceDate)) }
             if change.rereadNotes { try execute("DELETE FROM settings WHERE key = ?;", Self.notesCursorKey) }
+            if let sightings = change.sightings { try writeSetting(Self.sightingsKey, try encode(sightings)) }
+            if let dismissed = change.dismissedProposals { try writeSetting(Self.dismissedProposalsKey, try encode(dismissed)) }
+            if let lastSeen = change.projectsLastSeen { try writeSetting(Self.projectsLastSeenKey, try encode(lastSeen)) }
             if let recipients = change.recipients { try writeSetting(Self.recipientsKey, try encode(recipients)) }
             for line in change.digest {
                 try execute("""
