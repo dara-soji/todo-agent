@@ -12,6 +12,9 @@ final class GmailSource: MailSource {
     static let firstRunQuery = "in:inbox newer_than:3d"
     /// The most messages the first run reads.
     static let firstRunLimit = 200
+    /// Mail Dara sent recently: its recipients are VIPs.
+    static let recentlySentQuery = "in:sent newer_than:90d"
+    static let recentlySentLimit = 500
     /// More plain text than Triage sends; the core cuts it down.
     static let textLimit = 8_192
 
@@ -43,41 +46,99 @@ final class GmailSource: MailSource {
         // The cursor comes first, so mail arriving while this runs is read next time.
         let profile = try await get("profile")
         guard let history = profile["historyId"] as? String else { throw Failure.http(0) }
+        let inbox = try await search(Self.firstRunQuery, limit: Self.firstRunLimit)
+        return MailBatch(messages: try await messages(inbox), cursor: history)
+    }
+
+    func recentlySent() async throws -> [SentMail] {
+        try await sentMail(try await search(Self.recentlySentQuery, limit: Self.recentlySentLimit))
+    }
+
+    /// Message ids matching a Gmail search, newest first, at most `limit`.
+    private func search(_ q: String, limit: Int) async throws -> [String] {
         var ids: [String] = []
         var page: String?
         repeat {
-            var query = [URLQueryItem(name: "q", value: Self.firstRunQuery), URLQueryItem(name: "maxResults", value: "100")]
+            var query = [URLQueryItem(name: "q", value: q), URLQueryItem(name: "maxResults", value: "100")]
             if let page { query.append(URLQueryItem(name: "pageToken", value: page)) }
             let json = try await get("messages", query)
             ids += (json["messages"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
             page = json["nextPageToken"] as? String
-        } while page != nil && ids.count < Self.firstRunLimit
-        if page != nil || ids.count > Self.firstRunLimit {
-            NSLog("TodoAgent: first Gmail run read the newest \(Self.firstRunLimit) inbox messages only")
-        }
-        return MailBatch(messages: try await messages(Array(ids.prefix(Self.firstRunLimit))), cursor: history)
+        } while page != nil && ids.count < limit
+        if page != nil || ids.count > limit { NSLog("TodoAgent: Gmail search read the newest \(limit) messages only") }
+        return Array(ids.prefix(limit))
     }
 
+    /// One history read for every label, so a single cursor covers inbox and sent mail alike.
+    /// Sent mail is best effort: failing to read it never holds up the inbox.
     private func sinceHistory(_ cursor: String) async throws -> MailBatch {
-        var ids: [String] = []
+        var inbox: [String] = []
+        var sent: [String] = []
         var latest = cursor
         var page: String?
         repeat {
             var query = [
                 URLQueryItem(name: "startHistoryId", value: cursor), URLQueryItem(name: "historyTypes", value: "messageAdded"),
-                URLQueryItem(name: "labelId", value: "INBOX"),
             ]
             if let page { query.append(URLQueryItem(name: "pageToken", value: page)) }
             let json = try await get("history", query)
             for record in json["history"] as? [[String: Any]] ?? [] {
                 for added in record["messagesAdded"] as? [[String: Any]] ?? [] {
-                    if let id = (added["message"] as? [String: Any])?["id"] as? String, !ids.contains(id) { ids.append(id) }
+                    guard let message = added["message"] as? [String: Any], let id = message["id"] as? String else { continue }
+                    let labels = message["labelIds"] as? [String] ?? []
+                    if labels.contains("SENT") {
+                        if !sent.contains(id) { sent.append(id) }
+                    } else if labels.contains("INBOX"), !inbox.contains(id) {
+                        inbox.append(id)
+                    }
                 }
             }
             if let history = json["historyId"] as? String { latest = history }
             page = json["nextPageToken"] as? String
         } while page != nil
-        return MailBatch(messages: try await messages(ids), cursor: latest)
+        var recipients: [SentMail] = []
+        do {
+            recipients = try await sentMail(sent)
+        } catch {
+            NSLog("TodoAgent: reading sent mail failed: \(type(of: error))")
+        }
+        return MailBatch(messages: try await messages(inbox), sent: recipients, cursor: latest)
+    }
+
+    /// Who each sent message went to, and when: the To and Cc headers only.
+    private func sentMail(_ ids: [String]) async throws -> [SentMail] {
+        let metadata = [URLQueryItem(name: "format", value: "metadata")]
+            + ["To", "Cc"].map { URLQueryItem(name: "metadataHeaders", value: $0) }
+        var sent: [SentMail] = []
+        for id in ids {
+            do {
+                let json = try await get("messages/\(id)", metadata)
+                let headers = (json["payload"] as? [String: Any])?["headers"] as? [[String: Any]] ?? []
+                let to = headers.filter { ["to", "cc"].contains(($0["name"] as? String)?.lowercased()) }
+                    .compactMap { $0["value"] as? String }
+                    .flatMap { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
+                let at = (json["internalDate"] as? String).flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
+                sent.append(SentMail(to: to, at: at))
+            } catch Failure.http(404) {
+                continue
+            }
+        }
+        return sent
+    }
+
+    func unreadThreads(among threadIDs: [String]) async throws -> Set<String> {
+        var unread: Set<String> = []
+        for thread in threadIDs {
+            let json: [String: Any]
+            do {
+                json = try await get("threads/\(thread)", [URLQueryItem(name: "format", value: "minimal")])
+            } catch Failure.http(404) {
+                continue  // Deleted: as good as read.
+            }
+            let labels = (json["messages"] as? [[String: Any]] ?? []).flatMap { $0["labelIds"] as? [String] ?? [] }
+            if labels.contains("UNREAD") { unread.insert(thread) }
+        }
+        return unread
     }
 
     func plainText(of message: EmailMessage) async throws -> String {
@@ -151,7 +212,7 @@ final class GmailSource: MailSource {
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {
-            NSLog("TodoAgent: Gmail \(status) on \(path.hasPrefix("messages/") ? "messages.get" : path)")
+            NSLog("TodoAgent: Gmail \(status) on \(path.split(separator: "/").first.map(String.init) ?? path)")
             throw Failure.http(status)
         }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]

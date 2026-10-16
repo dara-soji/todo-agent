@@ -17,7 +17,7 @@ final class MailTriage {
     init(assistant: Assistant) {
         runner = TriageRunner(
             assistant: assistant, mail: GmailSource(auth: auth),
-            triager: ClaudeClient(apiKey: { ClaudeAPIKey.load() }))
+            triager: ClaudeClient(apiKey: { ClaudeAPIKey.load() }), notifier: UserNotifier())
     }
 
     func start() {

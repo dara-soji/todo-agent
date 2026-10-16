@@ -40,6 +40,10 @@ public final class Assistant {
         case windowExcluded
         /// No open Suggestion has that id.
         case unknownSuggestion(Suggestion.ID)
+        /// No Digest line is showing for that thread.
+        case unknownDigestLine(String)
+        case notAVIP(String)
+        case alreadyVIP(String)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -116,6 +120,10 @@ public final class Assistant {
     private(set) var suggestionsByThread: [String: Suggestion]
     /// Where Triage has read the mailbox up to; nil before the first run.
     public private(set) var mailCursor: String?
+    /// Digest lines by thread, cleared ones included until their day is up.
+    private(set) var digestByThread: [String: DigestLine]
+    /// When Dara last emailed each address, for the last 90 days.
+    private(set) var recipients: [String: Date]
     /// Today's API spend, read from the audit log once a day and added to as calls are made.
     var apiSpend: (day: Date, today: Double) = (.distantPast, 0)
 
@@ -136,6 +144,8 @@ public final class Assistant {
         self.settings = snapshot.settings
         self.suggestionsByThread = Dictionary(snapshot.suggestions.map { ($0.threadID, $0) }, uniquingKeysWith: { _, last in last })
         self.mailCursor = snapshot.mailCursor
+        self.digestByThread = Dictionary(snapshot.digest.map { ($0.threadID, $0) }, uniquingKeysWith: { _, last in last })
+        self.recipients = snapshot.recipients
     }
 
     public func receive(_ signal: Signal) {
@@ -161,6 +171,7 @@ public final class Assistant {
         wakeSnoozedTasks()
         expireDueAsks()
         expireSuggestions()
+        expireDigest()
     }
 
     /// The checked-out branch of the repo a repo-path Matcher names, if it is watched.
@@ -236,7 +247,8 @@ public final class Assistant {
         }
         guard committedCount(after: after) <= 1 else { throw Failure.secondCommittedTask }
         let creates = Set(after.tasks.filter { tasksByID[$0.id] == nil }.map(\.id.rawValue)
-            + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue))
+            + after.projects.filter { projectsByID[$0.id] == nil }.map(\.id.rawValue)
+            + after.suggestions.filter { suggestionsByThread[$0.threadID] == nil }.map(\.id.rawValue))
         let operation = Ask.Operation(
             kind: kind, summary: summary, preview: preview, before: before, after: after, undoes: undoes,
             creates: creates)
@@ -276,6 +288,7 @@ public final class Assistant {
             change.tasks += operation.after.tasks
             change.projects += operation.after.projects
             change.suggestions += operation.after.suggestions
+            change.digest += operation.after.digest
             if let settings = operation.after.settings { change.settings = settings }
         }
         guard committedCount(after: change) <= 1 else { throw Failure.secondCommittedTask }
@@ -377,7 +390,11 @@ public final class Assistant {
             && operation.before.projects.allSatisfy { project in
                 operation.creates.contains(project.id.rawValue) ? projectsByID[project.id] == nil : projectsByID[project.id] == project
             }
-            && operation.before.suggestions.allSatisfy { suggestionsByThread[$0.threadID] == $0 }
+            && operation.before.suggestions.allSatisfy { suggestion in
+                operation.creates.contains(suggestion.id.rawValue)
+                    ? suggestionsByThread[suggestion.threadID] == nil : suggestionsByThread[suggestion.threadID] == suggestion
+            }
+            && operation.before.digest.allSatisfy { digestByThread[$0.threadID] == $0 }
             && (operation.before.settings.map { $0 == settings } ?? true)
     }
 
@@ -386,6 +403,7 @@ public final class Assistant {
         change.tasks.allSatisfy { tasksByID[$0.id] == $0 }
             && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
             && change.suggestions.allSatisfy { suggestionsByThread[$0.threadID] == $0 }
+            && change.digest.allSatisfy { digestByThread[$0.threadID] == $0 }
             && (change.settings.map { $0 == settings } ?? true)
     }
 
@@ -430,7 +448,8 @@ public final class Assistant {
             // A Suggestion new to the store would be undone into a dismissed one.
             suggestions: change.suggestions.map { suggestion in
                 suggestionsByThread[suggestion.threadID] ?? { var undone = suggestion; undone.status = .dismissed; return undone }()
-            })
+            },
+            digest: change.digest.compactMap { digestByThread[$0.threadID] })
     }
 
     /// How many Tasks in play would be committed once `change` is written.
@@ -451,6 +470,9 @@ public final class Assistant {
         if let settings = change.settings { self.settings = settings }
         if let cursor = change.mailCursor { mailCursor = cursor }
         for suggestion in change.suggestions { suggestionsByThread[suggestion.threadID] = suggestion }
+        for line in change.digest { digestByThread[line.threadID] = line }
+        for thread in change.droppedDigest { digestByThread[thread] = nil }
+        if let recipients = change.recipients { self.recipients = recipients }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }

@@ -13,12 +13,32 @@ final class FakeMailSource: MailSource {
     var nextCursor = "h1"
     var fails = false
     var whileReading: (EmailMessage) -> Void = { _ in }
+    /// Threads Dara has read in Gmail.
+    var readThreads: Set<String> = []
+    /// Mail Dara sent, handed out with the next batch.
+    var sent: [SentMail] = []
 
     func fetchNew(after cursor: String?) async throws -> MailBatch {
         cursorsAskedFor.append(cursor)
         if fails { throw URLError(.notConnectedToInternet) }
-        defer { messages = [] }
-        return MailBatch(messages: messages, cursor: nextCursor)
+        defer { (messages, sent) = ([], []) }
+        return MailBatch(messages: messages, sent: sent, cursor: nextCursor)
+    }
+
+    var unreadFails = false
+
+    func unreadThreads(among threadIDs: [String]) async throws -> Set<String> {
+        if unreadFails { throw URLError(.timedOut) }
+        return Set(threadIDs).subtracting(readThreads)
+    }
+
+    /// The 90-day sent-mail read, and how often it was asked for.
+    var recent: [SentMail] = []
+    var recentAsked = 0
+
+    func recentlySent() async throws -> [SentMail] {
+        recentAsked += 1
+        return recent
     }
 
     func plainText(of message: EmailMessage) async throws -> String {

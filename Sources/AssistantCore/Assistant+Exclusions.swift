@@ -31,10 +31,14 @@ extension Assistant {
         let address = Self.address(in: sender)
         return exclusions.contains { exclusion in
             guard case let .sender(excluded) = exclusion else { return false }
-            guard excluded.hasPrefix("@") else { return address == excluded }
-            let domain = excluded.dropFirst()
-            return address.hasSuffix(excluded) || address.hasSuffix("." + domain)
+            return Self.address(address, matches: excluded)
         }
+    }
+
+    /// An address against "you@x.example", or "@x.example" for x.example and its subdomains.
+    static func address(_ address: String, matches pattern: String) -> Bool {
+        guard pattern.hasPrefix("@") else { return address == pattern }
+        return address.hasSuffix(pattern) || address.hasSuffix("." + pattern.dropFirst())
     }
 
     public func isExcluded(notesFolder: String) -> Bool {
@@ -53,8 +57,10 @@ extension Assistant {
     public func exclude(_ exclusion: Exclusion, by startedBy: StartedBy = .dara) throws -> Outcome {
         let exclusion = try exclusion.normalised()
         guard !exclusions.contains(exclusion) else { throw Failure.alreadyExcluded(exclusion) }
-        return try perform(.addExclusion, "Added an exclusion", by: startedBy,
-                           writing: changingSettings { $0.exclusions.append(exclusion) })
+        var change = changingSettings { $0.exclusions.append(exclusion) }
+        // Lines already in the Digest from that sender go too.
+        change.digest = clearingExcluded(by: [exclusion])
+        return try perform(.addExclusion, "Added an exclusion", by: startedBy, writing: change)
     }
 
     /// Takes something off the exclude list. Ask: Dara confirms in the menu bar.
