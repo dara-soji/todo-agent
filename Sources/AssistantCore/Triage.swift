@@ -177,15 +177,19 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
     public var fingerprint: String?
     /// For a sheet row, where it is now; nil once the row is gone.
     public var row: Int?
-    /// For a note, the Apple Notes folder it is in.
-    public var notesFolder: String?
+    /// For a note, the Apple Notes folders it is in, outermost first.
+    public var notesFolder: [String]?
+    /// For a note, actions already handled by an earlier Task: never put in the title again.
+    public var handledActions: [String]?
 
     init(
         id: ID, threadID: String, title: String, reason: String, source: Task.Source, backLink: String,
         guessedDeadline: Date?, created: Date, status: Status, from: String? = nil, messageAt: Date? = nil,
-        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil, fingerprint: String? = nil, row: Int? = nil, notesFolder: String? = nil
+        task: Task.ID? = nil, repliedAt: Date? = nil, notYetAt: Date? = nil, fingerprint: String? = nil, row: Int? = nil, notesFolder: [String]? = nil,
+        handledActions: [String]? = nil
     ) {
         self.notesFolder = notesFolder
+        self.handledActions = handledActions
         self.fingerprint = fingerprint
         self.row = row
         self.repliedAt = repliedAt
@@ -220,7 +224,8 @@ public struct Suggestion: Identifiable, Equatable, Sendable, Codable {
             notYetAt: try c.decodeIfPresent(Date.self, forKey: .notYetAt),
             fingerprint: try c.decodeIfPresent(String.self, forKey: .fingerprint),
             row: try c.decodeIfPresent(Int.self, forKey: .row),
-            notesFolder: try c.decodeIfPresent(String.self, forKey: .notesFolder))
+            notesFolder: try c.decodeIfPresent([String].self, forKey: .notesFolder),
+            handledActions: try c.decodeIfPresent([String].self, forKey: .handledActions))
     }
 }
 

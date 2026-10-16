@@ -349,6 +349,7 @@ extension SQLiteStore: AssistantStore {
             }
             if let cursor = change.mailCursor { try writeSetting(Self.mailCursorKey, cursor) }
             if let cursor = change.notesCursor { try writeSetting(Self.notesCursorKey, String(cursor.timeIntervalSinceReferenceDate)) }
+            if change.rereadNotes { try execute("DELETE FROM settings WHERE key = ?;", Self.notesCursorKey) }
             if let recipients = change.recipients { try writeSetting(Self.recipientsKey, try encode(recipients)) }
             for line in change.digest {
                 try execute("""

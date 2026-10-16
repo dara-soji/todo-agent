@@ -9,12 +9,20 @@ final class FakeNotes: NotesSource {
     var all: [Note] = []
     var asked: [(since: Date?, skipping: [String])] = []
     var fails = false
+    let clock: FakeClock
+    var whileReading: () -> Void = {}
 
-    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> [Note] {
+    init(clock: FakeClock) {
+        self.clock = clock
+    }
+
+    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> NotesRead {
         asked.append((since, skipping))
         if fails { throw URLError(.timedOut) }
+        whileReading()
         // A careless adapter might hand back everything: the core must still drop Excluded folders.
-        return all.filter { since == nil || $0.modified > since! }
+        return NotesRead(
+            notes: all.filter { since == nil || $0.modified > since! }, present: Set(all.map(\.id)), startedAt: clock.now)
     }
 }
 
@@ -22,7 +30,11 @@ final class FakeNotes: NotesSource {
 @Suite struct NotesTests {
     let clock = FakeClock()
     let store = InMemoryStore()
-    let notes = FakeNotes()
+    let notes: FakeNotes
+
+    init() {
+        notes = FakeNotes(clock: clock)
+    }
 
     func makeAssistant() -> Assistant {
         try! Assistant(clock: clock, store: store, homeDirectory: "/Users/dara")
@@ -32,8 +44,11 @@ final class FakeNotes: NotesSource {
         NotesRunner(assistant: assistant, notes: notes)
     }
 
-    func note(_ id: String, _ text: String, folder: String = "Notes", title: String = "Weekend", ago minutes: Double = 1) -> Note {
-        Note(id: id, folder: folder, title: title, text: text, modified: clock.now - minutes * 60)
+    func note(
+        _ id: String, _ text: String, folder: String = "Notes", in parents: [String] = [], title: String = "Weekend",
+        ago minutes: Double = 1
+    ) -> Note {
+        Note(id: id, folders: parents + [folder], title: title, text: text, modified: clock.now - minutes * 60)
     }
 
     func put(_ note: Note) {
@@ -219,7 +234,7 @@ final class FakeNotes: NotesSource {
         clock.advance(minutes: 5)
         await runner(makeAssistant()).run()
 
-        #expect(notes.asked.map(\.since) == [clock.now - 5 * 60 - 14 * 86_400, clock.now - 5 * 60 - 10 * 60])
+        #expect(notes.asked.map(\.since) == [clock.now - 5 * 60 - 14 * 86_400, clock.now - 5 * 60 - 60])
         #expect(assistant.suggestions.map(\.title) == ["Book the dentist"])
     }
 
@@ -231,6 +246,144 @@ final class FakeNotes: NotesSource {
         await runner(assistant).run()
 
         #expect(notes.asked.map(\.since) == [clock.now - 14 * 86_400, clock.now - 14 * 86_400])
+    }
+
+    @Test func anEditWhileTheSuggestionIsHeldIsPickedUpAfterTheAsk() async throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.acceptSuggestion)
+        put(note("n1", "[ ] Book the dentist"))
+        await runner(assistant).run()
+        try assistant.acceptSuggestion(try #require(assistant.suggestions.first).id)
+        clock.advance(minutes: 5)
+        put(note("n1", "[ ] Book the dentist on Tuesday", ago: 0))
+        clock.advance(minutes: 1)
+        await runner(assistant).run()
+
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+        clock.advance(minutes: 15)
+        await runner(assistant).run()
+
+        #expect(assistant.tasks.map(\.title) == ["Book the dentist on Tuesday"])
+    }
+
+    @Test func anEditWhileTheTaskIsHeldWaitsAndDarasEditStillRuns() async throws {
+        let assistant = makeAssistant()
+        put(note("n1", "[ ] Book the dentist"))
+        await runner(assistant).run()
+        try assistant.acceptSuggestion(try #require(assistant.suggestions.first).id)
+        let task = try #require(assistant.tasks.first)
+        try assistant.tighten(.editTask)
+        _ = try assistant.editTask(task.id, TaskChanges(effort: .some(.small)))
+        clock.advance(minutes: 5)
+        put(note("n1", "[ ] Book the dentist on Tuesday", ago: 0))
+        clock.advance(minutes: 1)
+        await runner(assistant).run()
+
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+        clock.advance(minutes: 15)
+        await runner(assistant).run()
+
+        #expect(assistant.task(task.id)?.effort == .small)
+        #expect(assistant.task(task.id)?.title == "Book the dentist on Tuesday")
+    }
+
+    @Test func aDeletedNoteDoesNotBreakAnAcceptHeldForIt() async throws {
+        let assistant = makeAssistant()
+        try assistant.tighten(.acceptSuggestion)
+        put(note("n1", "[ ] Book the dentist"))
+        await runner(assistant).run()
+        try assistant.acceptSuggestion(try #require(assistant.suggestions.first).id)
+
+        notes.all.removeAll()
+        clock.advance(minutes: 15)
+        await runner(assistant).run()
+
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+        #expect(assistant.tasks.count == 1)
+    }
+
+    @Test func aDeletedOrMovedAwayNoteLosesItsSuggestion() async throws {
+        let assistant = makeAssistant()
+        put(note("n1", "[ ] Book the dentist"))
+        await runner(assistant).run()
+
+        notes.all.removeAll()
+        clock.advance(minutes: 15)
+        await runner(assistant).run()
+
+        #expect(assistant.suggestions.isEmpty)
+    }
+
+    @Test func aFolderInsideAnExcludedOneIsExcludedIgnoringCase() async throws {
+        let assistant = makeAssistant()
+        try assistant.exclude(.notesFolder("private"))
+        put(note("n1", "[ ] Secret thing", folder: "Health", in: ["Private"]))
+        put(note("n2", "[ ] Book the dentist"))
+
+        await runner(assistant).run()
+
+        #expect(assistant.suggestions.map(\.title) == ["Book the dentist"])
+    }
+
+    @Test func excludingAParentFolderTakesItsSubfoldersSuggestionsAway() async throws {
+        let assistant = makeAssistant()
+        put(note("n1", "[ ] Secret thing", folder: "Health", in: ["Private"]))
+        await runner(assistant).run()
+
+        try assistant.exclude(.notesFolder("PRIVATE"))
+
+        #expect(assistant.suggestions.isEmpty)
+    }
+
+    @Test func aFolderExcludedWhileItWasReadIsDropped() async throws {
+        let assistant = makeAssistant()
+        put(note("n1", "[ ] Secret thing", folder: "Private"))
+        notes.whileReading = { try? assistant.exclude(.notesFolder("Private")) }
+
+        await runner(assistant).run()
+
+        #expect(assistant.suggestions.isEmpty)
+        #expect(!String(describing: try store.load()).contains("Secret thing"))
+    }
+
+    @Test func removingANotesExclusionReadsAgainFromTheStart() async throws {
+        let assistant = makeAssistant()
+        try assistant.exclude(.notesFolder("Private"))
+        await runner(assistant).run()
+        #expect(assistant.notesReadUpTo != nil)
+
+        guard case .pending = try assistant.removeExclusion(.notesFolder("Private")) else { return }
+        try assistant.confirmAsk(try #require(assistant.asks.first).id)
+
+        #expect(assistant.notesReadUpTo == nil)
+        #expect(makeAssistant().notesReadUpTo == nil)
+    }
+
+    @Test func doneActionsStayOutOfLaterTitles() async throws {
+        let assistant = makeAssistant()
+        put(note("n1", "[ ] Book the dentist"))
+        await runner(assistant).run()
+        try assistant.acceptSuggestion(try #require(assistant.suggestions.first).id)
+        try assistant.completeTask(try #require(assistant.tasks.first).id)
+        clock.advance(minutes: 5)
+        put(note("n1", "[ ] Book the dentist\n[ ] Pay the dentist", ago: 0))
+        clock.advance(minutes: 1)
+        await runner(assistant).run()
+        clock.advance(minutes: 5)
+
+        put(note("n1", "[ ] Book the dentist\n[ ] Pay the dentist\n[ ] Floss", ago: 0))
+        clock.advance(minutes: 1)
+        await runner(assistant).run()
+
+        #expect(assistant.suggestions.map(\.title) == ["Pay the dentist (+1 more)"])
+    }
+
+    @Test(arguments: ["Todos: buy milk", "Todo app ideas", "[x] Done", "Just text"])
+    func notActions(_ line: String) async {
+        let assistant = makeAssistant()
+        put(note("n1", line))
+        await runner(assistant).run()
+        #expect(assistant.suggestions.isEmpty, "\(line)")
     }
 
     @Test func noNoteContentGoesToTheAPI() async throws {

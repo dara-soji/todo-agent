@@ -2,48 +2,54 @@ import AppKit
 import AssistantCore
 import Foundation
 
-/// The Notes port over AppleScript, run in-process (no shell) on its own queue so a slow or first
-/// Automation prompt never freezes the menu bar. Excluded folders, and Recently Deleted, are skipped
-/// inside the script: their notes are never read, not even their titles.
-final class AppleNotes: NotesSource, @unchecked Sendable {
-    private static let fieldSeparator = "\u{1F}"
-    private static let noteSeparator = "\u{1E}"
+/// The Notes port over AppleScript, run in-process (no shell) on the shared AppleScript queue so a
+/// slow read or a first Automation prompt never freezes the menu bar. Folders are walked one by one
+/// with their parents: a folder that is Excluded, or inside one that is, and Recently Deleted, are
+/// never opened, so their notes, titles and ids are never read. If Notes wasn't open, it is quit
+/// again after the read.
+@MainActor
+final class AppleNotes: NotesSource {
+    private static let bundleID = "com.apple.Notes"
     /// errAEEventNotPermitted: Dara declined Automation for Notes.
     private static let notPermitted = -1743
+    /// The most plain text read from one note.
+    static let textLimit = 20_000
 
-    private let queue = DispatchQueue(label: "TodoAgent.AppleNotes")
     /// Dara declined Automation for Notes; shown in the menu.
-    @MainActor private(set) var denied = false
-
-    @MainActor
-    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> [Note] {
-        // A second back, so a note saved in the same second as the last read isn't missed.
-        let secondsAgo = since.map { max(0, Int(Date().timeIntervalSince($0)) + 1) }
-        let source = Self.script(secondsAgo: secondsAgo, skipping: skipping)
-        let result: Result<String, Error> = await withCheckedContinuation { continuation in
-            queue.async {
-                var error: NSDictionary?
-                let output = NSAppleScript(source: source)?.executeAndReturnError(&error)
-                if let error {
-                    let code = error[NSAppleScript.errorNumber] as? Int ?? 0
-                    continuation.resume(returning: .failure(Failure.script(code)))
-                } else {
-                    continuation.resume(returning: .success(output?.stringValue ?? ""))
-                }
-            }
-        }
-        switch result {
-        case let .success(text):
-            denied = false
-            return Self.parse(text)
-        case let .failure(error):
-            if case Failure.script(Self.notPermitted) = error { denied = true }
-            throw error
-        }
-    }
+    private(set) var denied = false
 
     enum Failure: Error {
         case script(Int)
+    }
+
+    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> NotesRead {
+        let startedAt = Date()
+        let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).isEmpty
+        let secondsAgo = since.map { max(0, Int(startedAt.timeIntervalSince($0)) + 1) } ?? 100 * 365 * 86_400
+        let source = Self.script(secondsAgo: secondsAgo, skipping: skipping)
+        let result: Result<NSAppleEventDescriptor, Failure> = await withCheckedContinuation { continuation in
+            AppleScriptQueue.shared.async {
+                var error: NSDictionary?
+                let output = NSAppleScript(source: source)?.executeAndReturnError(&error)
+                if let error {
+                    continuation.resume(returning: .failure(.script(error[NSAppleScript.errorNumber] as? Int ?? 0)))
+                } else {
+                    continuation.resume(returning: .success(output ?? NSAppleEventDescriptor.list()))
+                }
+            }
+        }
+        if !wasRunning {
+            NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).forEach { $0.terminate() }
+        }
+        switch result {
+        case let .success(descriptor):
+            denied = false
+            let (notes, present) = Self.parse(descriptor)
+            return NotesRead(notes: notes, present: present, startedAt: startedAt)
+        case let .failure(error):
+            if case .script(Self.notPermitted) = error { denied = true }
+            throw error
+        }
     }
 
     /// Opens the note in Notes.
@@ -56,30 +62,65 @@ final class AppleNotes: NotesSource, @unchecked Sendable {
                 activate
             end tell
             """
-        queue.async {
+        AppleScriptQueue.shared.async {
             var error: NSDictionary?
             NSAppleScript(source: source)?.executeAndReturnError(&error)
         }
     }
 
-    static func script(secondsAgo: Int?, skipping: [String]) -> String {
+    /// Returns {found, present}: each found note as {id, {folders outermost first}, title, ISO date,
+    /// text}, and the ids of every note in a folder that is read.
+    static func script(secondsAgo: Int, skipping: [String]) -> String {
         let skipped = (skipping + ["Recently Deleted"]).map(quoted).joined(separator: ", ")
-        let filter = secondsAgo.map { "whose modification date > ((current date) - \($0))" } ?? ""
         return """
-            with timeout of 120 seconds
-                set skipped to {\(skipped)}
-                set output to ""
+            set cutoff to (current date) - \(secondsAgo)
+            set skipped to {\(skipped)}
+            set found to {}
+            set present to {}
+            with timeout of 300 seconds
                 tell application "Notes"
-                    repeat with f in folders
-                        if skipped does not contain (name of f as text) then
-                            repeat with n in (notes of f \(filter))
-                                set output to output & (id of n) & "\(fieldSeparator)" & (name of f) & "\(fieldSeparator)" & (name of n) & "\(fieldSeparator)" & ((modification date of n) as «class isot» as string) & "\(fieldSeparator)" & (plaintext of n) & "\(noteSeparator)"
+                    set pending to {}
+                    repeat with a in accounts
+                        repeat with f in folders of a
+                            set end of pending to contents of f
+                        end repeat
+                    end repeat
+                    set visited to {}
+                    set i to 1
+                    repeat while i is less than or equal to (count of pending)
+                        set f to item i of pending
+                        set i to i + 1
+                        set folderID to id of f
+                        if visited does not contain folderID then
+                            set end of visited to folderID
+                            set folderPath to {}
+                            set skip to false
+                            set c to f
+                            repeat 50 times
+                                set folderName to name of c as text
+                                set beginning of folderPath to folderName
+                                if skipped contains folderName then set skip to true
+                                set c to container of c
+                                if class of c is not folder then exit repeat
                             end repeat
+                            if not skip then
+                                repeat with noteID in (id of every note of f)
+                                    set end of present to (noteID as text)
+                                end repeat
+                                repeat with n in (notes of f whose modification date > cutoff)
+                                    set t to plaintext of n
+                                    if length of t > \(textLimit) then set t to text 1 thru \(textLimit) of t
+                                    set end of found to {id of n, folderPath, name of n, (modification date of n) as «class isot» as string, t}
+                                end repeat
+                                repeat with sub in folders of f
+                                    set end of pending to contents of sub
+                                end repeat
+                            end if
                         end if
                     end repeat
                 end tell
-                return output
             end timeout
+            return {found, present}
             """
     }
 
@@ -88,18 +129,25 @@ final class AppleNotes: NotesSource, @unchecked Sendable {
         "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
     }
 
-    static func parse(_ text: String) -> [Note] {
+    static func parse(_ descriptor: NSAppleEventDescriptor) -> (notes: [Note], present: Set<String>) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
-        return text.components(separatedBy: noteSeparator).compactMap { record in
-            let fields = record.components(separatedBy: fieldSeparator)
-            guard fields.count >= 5, let modified = formatter.date(from: fields[3]) else { return nil }
-            return Note(
-                id: fields[0], folder: fields[1], title: fields[2],
-                text: fields[4...].joined(separator: fieldSeparator), modified: modified)
+        func items(_ list: NSAppleEventDescriptor?) -> [NSAppleEventDescriptor] {
+            guard let list, list.numberOfItems > 0 else { return [] }
+            return (1...list.numberOfItems).compactMap { list.atIndex($0) }
         }
+        let notes = items(descriptor.atIndex(1)).compactMap { record -> Note? in
+            let fields = items(record)
+            guard fields.count == 5, let id = fields[0].stringValue, let date = fields[3].stringValue,
+                  let modified = formatter.date(from: date)
+            else { return nil }
+            return Note(
+                id: id, folders: items(fields[1]).compactMap(\.stringValue), title: fields[2].stringValue ?? "",
+                text: fields[4].stringValue ?? "", modified: modified)
+        }
+        return (notes, Set(items(descriptor.atIndex(2)).compactMap(\.stringValue)))
     }
 }
 

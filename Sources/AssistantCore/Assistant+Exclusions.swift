@@ -41,8 +41,13 @@ extension Assistant {
         return address.hasSuffix(pattern) || address.hasSuffix("." + pattern.dropFirst())
     }
 
-    public func isExcluded(notesFolder: String) -> Bool {
-        exclusions.contains(.notesFolder(notesFolder))
+    /// A notes folder by name, ignoring case as Notes does; a folder inside an Excluded one is Excluded too.
+    public func isExcluded(notesFolder: String, within parents: [String] = []) -> Bool {
+        let names = Set((parents + [notesFolder]).map { $0.lowercased() })
+        return exclusions.contains { exclusion in
+            if case let .notesFolder(folder) = exclusion { return names.contains(folder.lowercased()) }
+            return false
+        }
     }
 
     /// "Exclude <app/site>" for the window in front: the site in a browser, else the app.

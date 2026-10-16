@@ -1,28 +1,43 @@
 import Foundation
 
-/// One Apple Note as read: its id, folder, title and plain text. The text is only looked through
+/// One Apple Note as read: its id, folders, title and plain text. The text is only looked through
 /// for open actions; it is never stored or sent anywhere.
 public struct Note: Equatable, Sendable {
     public let id: String
-    public let folder: String
+    /// The folder it is in, and the folders around that one, outermost first.
+    public let folders: [String]
     public let title: String
     public let text: String
     public let modified: Date
 
-    public init(id: String, folder: String, title: String, text: String, modified: Date) {
+    public init(id: String, folders: [String], title: String, text: String, modified: Date) {
         self.id = id
-        self.folder = folder
+        self.folders = folders
         self.title = title
         self.text = text
         self.modified = modified
     }
 }
 
-/// Port: Apple Notes, read unattended while Dara is logged in. Notes in `skipping` folders are never
-/// read, not even their titles.
+/// What one read of Notes found: the notes changed since the cut-off, the ids of every note still in
+/// a readable folder (to notice deleted or moved notes), and when the read began.
+public struct NotesRead: Sendable {
+    public let notes: [Note]
+    public let present: Set<String>
+    public let startedAt: Date
+
+    public init(notes: [Note], present: Set<String>, startedAt: Date) {
+        self.notes = notes
+        self.present = present
+        self.startedAt = startedAt
+    }
+}
+
+/// Port: Apple Notes, read unattended while Dara is logged in. Notes in a `skipping` folder, or in
+/// any folder inside one, are never read, not even their titles or ids.
 @MainActor
 public protocol NotesSource: AnyObject {
-    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> [Note]
+    func notes(modifiedSince since: Date?, skippingFolders skipping: [String]) async throws -> NotesRead
 }
 
 /// Reads notes changed since the last read and turns their open actions into Suggestions, one per
@@ -46,28 +61,35 @@ public final class NotesRunner {
         running = true
         defer { running = false }
         let since = assistant.notesCursor ?? assistant.clockNow - Self.firstReadLooksBack
-        let read: [Note]
+        let read: NotesRead
         do {
             read = try await notes.notes(modifiedSince: since, skippingFolders: assistant.excludedNotesFolders)
         } catch {
             return NSLog("TodoAgent: reading Notes failed: \(type(of: error))")
         }
-        // Checked again here: the adapter skips them, but the exclude list may have changed meanwhile.
-        assistant.intake(read.filter { !assistant.isExcluded(notesFolder: $0.folder) }, readUpTo: read.map(\.modified).max())
+        assistant.intake(read, readFrom: since)
     }
 }
 
 extension Assistant {
+    /// Each read of Notes starts this long before the last one began, so an edit made while it ran
+    /// isn't missed.
+    static let notesOverlap: TimeInterval = 60
     /// The longest Suggestion title kept for a note's first action.
     static let notesTitleLimit = 100
+
+    /// Where Notes has been read up to; nil until the first read, or after a folder stops being Excluded.
+    public var notesReadUpTo: Date? { notesCursor }
 
     var excludedNotesFolders: [String] {
         exclusions.compactMap { if case let .notesFolder(folder) = $0 { folder } else { nil } }.sorted()
     }
 
-    /// Open actions in a note: unticked checklist lines ("- [ ]", "[ ]", "☐") and "TODO:" lines.
+    /// Open actions in a note: unticked checklist lines typed as "- [ ]", "[ ]" or "☐", and lines
+    /// starting "TODO:" or "To do:". Notes' own checklists don't say in plain text whether an item is
+    /// ticked, so they aren't read as actions.
     static func openActions(in text: String) -> [String] {
-        let pattern = #"^\s*(?:[-*•]\s*)?(?:\[ \]|☐|TODO:?|To ?do:)\s*(.+?)\s*$"#
+        let pattern = #"^\s*(?:[-*•]\s*)?(?:\[ \]|☐|\bTODO\s*:|\bTo[ -]?do\s*:)\s*(.+?)\s*$"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
         return text.split(whereSeparator: \.isNewline).compactMap { line in
             let line = String(line)
@@ -81,50 +103,75 @@ extension Assistant {
     /// Each note's open actions become, or update, its one Suggestion. An edit updates the open
     /// Suggestion, or the accepted Task (never over a title Dara set); new actions in a note whose
     /// Task is done or dropped become a new Suggestion; a dismissed note stays quiet; a note with no
-    /// open actions left loses its open Suggestion.
-    func intake(_ notes: [Note], readUpTo latest: Date?) {
+    /// open actions left, or gone (deleted, or moved somewhere not read), loses its open Suggestion.
+    /// A note whose Suggestion or Task is waiting in an Ask is read again next time.
+    func intake(_ read: NotesRead, readFrom since: Date) {
         var changed: [Suggestion] = []
-        for note in notes {
+        var skippedSince: Date?
+        // Checked again here: the adapter skips them, but the exclude list may have changed meanwhile.
+        for note in read.notes where !isExcluded(notesFolder: note.folders.last ?? "", within: note.folders.dropLast()) {
             let key = "note:\(note.id)"
             let actions = Self.openActions(in: note.text)
             let fingerprint = actions.joined(separator: "\n")
-            let title = Self.notesTitle(actions)
             guard let existing = suggestionsByThread[key] else {
-                if !actions.isEmpty { changed.append(newNoteSuggestion(note, title, fingerprint)) }
+                if !actions.isEmpty { changed.append(newNoteSuggestion(note, actions, handled: [])) }
                 continue
             }
-            guard existing.fingerprint != fingerprint,
-                  !asks.contains(where: { $0.touches.contains(existing.id.rawValue) }) else { continue }
+            let task = liveTask(of: existing)
+            guard existing.fingerprint != fingerprint else { continue }
+            let held = asks.contains { ask in
+                ask.touches.contains(existing.id.rawValue) || task.map { ask.touches.contains($0.id.rawValue) } == true
+            }
+            guard !held else {
+                skippedSince = min(skippedSince ?? note.modified, note.modified)
+                continue
+            }
+            let handled = existing.handledActions ?? []
+            let open = actions.filter { !handled.contains($0) }
             var updated = existing
             updated.fingerprint = fingerprint
-            updated.notesFolder = note.folder
+            updated.notesFolder = note.folders
             switch existing.status {
             case .open:
-                if actions.isEmpty { updated.status = .expired } else { updated.title = title }
+                if open.isEmpty { updated.status = .expired } else { updated.title = Self.notesTitle(open) }
                 changed.append(updated)
             case .accepted:
-                if let task = liveTask(of: existing) {
-                    guard actions.isEmpty || (try? sourceUpdate(task.id, title: title)) == true else { continue }
+                if let task {
+                    guard open.isEmpty || (try? sourceUpdate(task.id, title: Self.notesTitle(open))) == true else {
+                        skippedSince = min(skippedSince ?? note.modified, note.modified)
+                        continue
+                    }
                     changed.append(updated)
-                } else if !actions.isEmpty {
-                    // Only the actions that are new since the Task was accepted.
-                    let old = Set((existing.fingerprint ?? "").split(separator: "\n").map(String.init))
-                    let fresh = actions.filter { !old.contains($0) }
-                    changed.append(fresh.isEmpty ? updated : newNoteSuggestion(note, Self.notesTitle(fresh), fingerprint))
                 } else {
-                    changed.append(updated)
+                    // Only the actions that are new since the Task was accepted.
+                    let done = handled + Self.actions(in: existing.fingerprint).filter { !handled.contains($0) }
+                    let fresh = actions.filter { !done.contains($0) }
+                    changed.append(fresh.isEmpty ? updated : newNoteSuggestion(note, actions, handled: done))
                 }
             case .expired, .seen:
-                changed.append(actions.isEmpty ? updated : newNoteSuggestion(note, title, fingerprint))
+                changed.append(open.isEmpty ? updated : newNoteSuggestion(note, actions, handled: handled))
             case .dismissed, .replied:
                 changed.append(updated)
             }
         }
+        // Open Suggestions whose note is gone from every readable folder go too.
+        changed += suggestionsByThread.values.filter { suggestion in
+            suggestion.status == .open && suggestion.threadID.hasPrefix("note:")
+                && !read.present.contains(String(suggestion.threadID.dropFirst("note:".count)))
+                && !changed.contains { $0.threadID == suggestion.threadID }
+                && !asks.contains { $0.touches.contains(suggestion.id.rawValue) }
+        }.map { var gone = $0; gone.status = .expired; return gone }
+        // The next read starts just before this one did, and never after a note left for later.
+        let cursor = min(read.startedAt - Self.notesOverlap, (skippedSince ?? .distantFuture) - 1)
         do {
-            try writeUnlogged(Change(suggestions: changed, notesCursor: latest))
+            try writeUnlogged(Change(suggestions: changed, notesCursor: max(cursor, since)))
         } catch {
             NSLog("TodoAgent: saving notes failed: \(type(of: error))")
         }
+    }
+
+    private static func actions(in fingerprint: String?) -> [String] {
+        (fingerprint ?? "").split(separator: "\n").map(String.init)
     }
 
     /// The first action, with how many more there are.
@@ -134,17 +181,20 @@ extension Assistant {
         return actions.count > 1 ? "\(short) (+\(actions.count - 1) more)" : String(short)
     }
 
-    private func newNoteSuggestion(_ note: Note, _ title: String, _ fingerprint: String) -> Suggestion {
+    private func newNoteSuggestion(_ note: Note, _ actions: [String], handled: [String]) -> Suggestion {
         Suggestion(
-            id: Suggestion.ID(), threadID: "note:\(note.id)", title: title, reason: "From the note “\(note.title)”",
-            source: .notes, backLink: "notes:\(note.id)", guessedDeadline: nil, created: clock.now, status: .open,
-            fingerprint: fingerprint, notesFolder: note.folder)
+            id: Suggestion.ID(), threadID: "note:\(note.id)", title: Self.notesTitle(actions.filter { !handled.contains($0) }),
+            reason: "From the note “\(note.title)”", source: .notes, backLink: "notes:\(note.id)", guessedDeadline: nil,
+            created: clock.now, status: .open, fingerprint: actions.joined(separator: "\n"), notesFolder: note.folders,
+            handledActions: handled)
     }
 
-    /// Open Suggestions from a notes folder now Excluded, expired.
+    /// Open Suggestions from a notes folder now Excluded, or one inside it, expired.
     func suggestionsInExcluded(_ exclusion: Exclusion) -> [Suggestion] {
         guard case let .notesFolder(folder) = exclusion else { return [] }
-        return suggestionsByThread.values.filter { $0.status == .open && $0.notesFolder == folder }.map { suggestion in
+        return suggestionsByThread.values.filter { suggestion in
+            suggestion.status == .open && (suggestion.notesFolder ?? []).contains { $0.lowercased() == folder.lowercased() }
+        }.map { suggestion in
             var gone = suggestion
             gone.status = .expired
             return gone

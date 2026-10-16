@@ -382,6 +382,13 @@ public final class Assistant {
 
     /// Stores the change and its log entries, then applies them. A failed store write changes nothing.
     private func write(_ change: Change, entries: [LogEntry]) throws {
+        var change = change
+        // A notes folder no longer Excluded (removed, or an undo) is read again from the start.
+        if let new = change.settings, excludedNotesFolders.contains(where: { folder in
+            !new.exclusions.contains(.notesFolder(folder))
+        }) {
+            change.rereadNotes = true
+        }
         try store.write(change, log: entries)
         apply(change)
         if !change.projects.isEmpty { forgetStaleGuesses() }
@@ -489,6 +496,7 @@ public final class Assistant {
         for thread in change.droppedDigest { digestByThread[thread] = nil }
         if let recipients = change.recipients { self.recipients = recipients }
         if let cursor = change.notesCursor { notesCursor = cursor }
+        if change.rereadNotes { notesCursor = nil }
         for task in change.tasks { tasksByID[task.id] = task }
         for project in change.projects { projectsByID[project.id] = project }
     }
