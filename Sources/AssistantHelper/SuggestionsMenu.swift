@@ -298,6 +298,11 @@ final class SuggestionsMenu: NSObject {
 
     /// Dara pastes their own desktop client's id and secret, then signs in in the browser.
     @objc private func connect() {
+        connectGoogle()
+    }
+
+    /// The client id and secret if not yet given, then the browser sign-in.
+    func connectGoogle() {
         if mail.auth.client == nil {
             let alert = NSAlert()
             alert.messageText = "Connect Google"

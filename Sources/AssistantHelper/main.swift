@@ -23,6 +23,9 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var mailTriage: MailTriage?
     private var sheetsPolling: SheetsPolling?
     private var notesPolling: NotesPolling?
+    private var logWindow: OperationLogWindow?
+    /// One walkthrough at a time: it waits on permission prompts, during which the menu still works.
+    private var walkthroughRunning = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let (assistant, storeProblem) = makeAssistant()
@@ -65,10 +68,13 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let gitWatcher = GitWatcher(delivering: receive)
         self.gitWatcher = gitWatcher
         gitWatcher.watch(assistant.repoPathsToWatch)
+        // Set once the log window exists, so it stays current while open.
+        var refreshLog: () -> Void = {}
         let changed = {
             gitWatcher.watch(assistant.repoPathsToWatch)
             statusItem.render(assistant.menuBar)
             nudgePanel.update()
+            refreshLog()
         }
         nudgePanel.onChange = changed
         modelCalls.onChange = changed
@@ -89,9 +95,54 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         let idleSensor = IdleSensor()
         self.idleSensor = idleSensor
         idleSensor.start(delivering: receive)
+        let logWindow = OperationLogWindow(assistant: assistant)
+        logWindow.onChange = changed
+        self.logWindow = logWindow
+        refreshLog = { logWindow.reload() }
+        statusItem.onShowLog = { logWindow.show() }
+        statusItem.currentNeedsSetup = { assistant.needsSetup }
+        let walkthrough = { [weak self] in
+            guard let self, !self.walkthroughRunning else { return }
+            self.walkthroughRunning = true
+            await SetupWalkthrough.run(assistant, askForAPIKey: { StatusItemController.askForAPIKey() },
+                                       connectGoogle: { suggestionsMenu.connectGoogle() })
+            self.walkthroughRunning = false
+            changed()
+        }
+        statusItem.onRunSetup = { [weak self] in
+            _Concurrency.Task {
+                let wasNeeded = assistant.needsSetup
+                await walkthrough()
+                // Finished from the menu after "Later": reading starts now.
+                if wasNeeded, !assistant.needsSetup, storeProblem == nil {
+                    self?.startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling,
+                                       notesPolling: notesPolling)
+                }
+            }
+        }
+
         // Without the store, the exclude list can't be trusted, so nothing is read at all.
         guard storeProblem == nil else { return }
+        guard !assistant.needsSetup else {
+            // First run: the walkthrough explains each permission before macOS asks for it.
+            _Concurrency.Task { [weak self] in
+                await walkthrough()
+                // "Later": nothing is read until setup is done, so exclusions come first.
+                guard !assistant.needsSetup else { return }
+                self?.startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling,
+                                   notesPolling: notesPolling)
+            }
+            return
+        }
         _ = ActiveWindowSensor.requestAccessibility()
+        startReading(assistant, receive: receive, mailTriage: mailTriage, sheetsPolling: sheetsPolling, notesPolling: notesPolling)
+    }
+
+    /// The window, calendar and Source readers. Only with the exclude list loaded.
+    private func startReading(
+        _ assistant: Assistant, receive: @escaping (Signal) -> Void, mailTriage: MailTriage, sheetsPolling: SheetsPolling,
+        notesPolling: NotesPolling
+    ) {
         let windowSensor = ActiveWindowSensor()
         windowSensor.excludesApp = { assistant.excludesApp($0) }
         windowSensor.excludesAnySite = { assistant.excludesAnySite }

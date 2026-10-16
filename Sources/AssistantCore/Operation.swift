@@ -165,13 +165,17 @@ public struct Change: Equatable, Sendable, Codable {
     public var dismissedProposals: [Matcher]?
     /// When each Project last matched, whole; or nil to leave it alone.
     public var projectsLastSeen: [Project.ID: Date]?
+    /// First-run setup finished.
+    public var setupDone: Bool?
 
     public init(
         tasks: [Task] = [], projects: [Project] = [], settings: Settings? = nil, suggestions: [Suggestion] = [],
         mailCursor: String? = nil, digest: [DigestLine] = [], recipients: [String: Date]? = nil,
         droppedDigest: [String] = [], notesCursor: Date? = nil, rereadNotes: Bool = false,
-        sightings: [Sighting]? = nil, dismissedProposals: [Matcher]? = nil, projectsLastSeen: [Project.ID: Date]? = nil
+        sightings: [Sighting]? = nil, dismissedProposals: [Matcher]? = nil, projectsLastSeen: [Project.ID: Date]? = nil,
+        setupDone: Bool? = nil
     ) {
+        self.setupDone = setupDone
         self.sightings = sightings
         self.dismissedProposals = dismissedProposals
         self.projectsLastSeen = projectsLastSeen
@@ -203,7 +207,8 @@ public struct Change: Equatable, Sendable, Codable {
             rereadNotes: try c.decodeIfPresent(Bool.self, forKey: .rereadNotes) ?? false,
             sightings: try c.decodeIfPresent([Sighting].self, forKey: .sightings),
             dismissedProposals: try c.decodeIfPresent([Matcher].self, forKey: .dismissedProposals),
-            projectsLastSeen: try c.decodeIfPresent([Project.ID: Date].self, forKey: .projectsLastSeen))
+            projectsLastSeen: try c.decodeIfPresent([Project.ID: Date].self, forKey: .projectsLastSeen),
+            setupDone: try c.decodeIfPresent(Bool.self, forKey: .setupDone))
     }
 }
 
@@ -228,6 +233,38 @@ public struct LogEntry: Identifiable, Equatable, Sendable, Codable {
     public let after: Change
     /// For an undo, the entry it reversed.
     public let undoes: ID?
+    /// A Task it wrote was purged from the Deleted list and taken out of it: it can't be undone.
+    public let purged: Bool
+
+    init(
+        id: ID, at: Date, kind: OperationKind, summary: String, tier: Tier, startedBy: StartedBy,
+        confirmation: Confirmation, before: Change, after: Change, undoes: ID?, purged: Bool = false
+    ) {
+        self.id = id
+        self.at = at
+        self.kind = kind
+        self.summary = summary
+        self.tier = tier
+        self.startedBy = startedBy
+        self.confirmation = confirmation
+        self.before = before
+        self.after = after
+        self.undoes = undoes
+        self.purged = purged
+    }
+
+    /// Entries stored before `purged` existed still load.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(ID.self, forKey: .id), at: try c.decode(Date.self, forKey: .at),
+            kind: try c.decode(OperationKind.self, forKey: .kind), summary: try c.decode(String.self, forKey: .summary),
+            tier: try c.decode(Tier.self, forKey: .tier), startedBy: try c.decode(StartedBy.self, forKey: .startedBy),
+            confirmation: try c.decode(Confirmation.self, forKey: .confirmation),
+            before: try c.decode(Change.self, forKey: .before), after: try c.decode(Change.self, forKey: .after),
+            undoes: try c.decodeIfPresent(ID.self, forKey: .undoes),
+            purged: try c.decodeIfPresent(Bool.self, forKey: .purged) ?? false)
+    }
 }
 
 /// Persistence port. The helper's SQLite store conforms; tests use an in-memory fake.
@@ -241,6 +278,37 @@ public protocol AssistantStore {
     func audit(_ call: APICall) throws
     /// What the API calls in the audit log since `since` cost.
     func apiSpend(since: Date) throws -> Double
+    /// Retention: drops log entries, audit lines and Now history from before each date, and the
+    /// Tasks given (purged from the Deleted list), and stores `rewritten` log entries over their old
+    /// versions (with the purged Tasks taken out), together.
+    func prune(_ cutoffs: Retention.Cutoffs, purging tasks: [Task.ID], rewriting rewritten: [LogEntry]) throws
+}
+
+/// How long each log is kept, and the Deleted list.
+public enum Retention {
+    public static let operationLog: TimeInterval = 90 * 24 * 60 * 60
+    public static let audit: TimeInterval = 30 * 24 * 60 * 60
+    public static let nowHistory: TimeInterval = 90 * 24 * 60 * 60
+    public static let deletedTasks: TimeInterval = 30 * 24 * 60 * 60
+
+    public struct Cutoffs: Equatable, Sendable {
+        public let log: Date
+        public let audit: Date
+        public let history: Date
+    }
+}
+
+extension StoreSnapshot {
+    /// What `prune` does, for stores that keep a snapshot.
+    public mutating func prune(_ cutoffs: Retention.Cutoffs, purging ids: [Task.ID], rewriting rewritten: [LogEntry]) {
+        log.removeAll { $0.at < cutoffs.log }
+        for entry in rewritten {
+            if let index = log.firstIndex(where: { $0.id == entry.id }) { log[index] = entry }
+        }
+        audit.removeAll { $0.at < cutoffs.audit }
+        history.removeAll { $0.end < cutoffs.history }
+        tasks.removeAll { ids.contains($0.id) }
+    }
 }
 
 /// Everything the store holds.
@@ -261,13 +329,16 @@ public struct StoreSnapshot: Equatable, Sendable {
     public var sightings: [Sighting]
     public var dismissedProposals: [Matcher]
     public var projectsLastSeen: [Project.ID: Date]
+    public var setupDone: Bool
 
     public init(
         projects: [Project] = [], tasks: [Task] = [], log: [LogEntry] = [], settings: Settings = Settings(),
         history: [NowBlock] = [], audit: [APICall] = [], suggestions: [Suggestion] = [], mailCursor: String? = nil,
         digest: [DigestLine] = [], recipients: [String: Date] = [:], notesCursor: Date? = nil,
-        sightings: [Sighting] = [], dismissedProposals: [Matcher] = [], projectsLastSeen: [Project.ID: Date] = [:]
+        sightings: [Sighting] = [], dismissedProposals: [Matcher] = [], projectsLastSeen: [Project.ID: Date] = [:],
+        setupDone: Bool = false
     ) {
+        self.setupDone = setupDone
         self.sightings = sightings
         self.dismissedProposals = dismissedProposals
         self.projectsLastSeen = projectsLastSeen
@@ -295,6 +366,7 @@ public struct StoreSnapshot: Equatable, Sendable {
         if let sightings = change.sightings { self.sightings = sightings }
         if let dismissed = change.dismissedProposals { dismissedProposals = dismissed }
         if let lastSeen = change.projectsLastSeen { projectsLastSeen = lastSeen }
+        if let done = change.setupDone { setupDone = done }
         for line in change.digest {
             digest.removeAll { $0.threadID == line.threadID }
             digest.append(line)
