@@ -23,6 +23,7 @@ final class GuardrailsMenu: NSObject {
         .removeExclusion: "Stop excluding something",
         .acceptSuggestion: "Accept a Suggestion", .dismissSuggestion: "Dismiss a Suggestion",
         .promoteDigestLine: "Make a Digest line a Suggestion", .addVIP: "Add a VIP", .removeVIP: "Remove a VIP",
+        .sourceUpdate: "Update a Task from its Source", .forgetNoiseSender: "Triage a never-from sender again",
     ]
 
     func item() -> NSMenuItem {

@@ -73,7 +73,7 @@ extension Assistant {
         let suggestion = Suggestion(
             id: Suggestion.ID(), threadID: threadID, title: line.subject.isEmpty ? line.from : line.subject,
             reason: "From the Digest", source: .email, backLink: line.backLink, guessedDeadline: nil,
-            created: clock.now, status: .open)
+            created: clock.now, status: .open, from: line.from, messageAt: line.receivedAt)
         return try perform(.promoteDigestLine, "Made “\(suggestion.title)” a Suggestion", by: startedBy,
                            writing: Change(suggestions: [suggestion], digest: clearing([threadID])))
     }

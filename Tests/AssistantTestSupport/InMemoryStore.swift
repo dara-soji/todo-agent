@@ -8,7 +8,9 @@ public final class InMemoryStore: AssistantStore {
 
     private var snapshot = StoreSnapshot()
 
-    public init() {}
+    public init(_ snapshot: StoreSnapshot = StoreSnapshot()) {
+        self.snapshot = snapshot
+    }
     public var failWrites = false
 
     public func load() throws -> StoreSnapshot {

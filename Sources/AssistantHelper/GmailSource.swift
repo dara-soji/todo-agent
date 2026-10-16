@@ -70,7 +70,7 @@ final class GmailSource: MailSource {
     }
 
     /// One history read for every label, so a single cursor covers inbox and sent mail alike.
-    /// Sent mail is best effort: failing to read it never holds up the inbox.
+    /// Failing to read sent mail never holds up the inbox.
     private func sinceHistory(_ cursor: String) async throws -> MailBatch {
         var inbox: [String] = []
         var sent: [String] = []
@@ -97,15 +97,18 @@ final class GmailSource: MailSource {
             page = json["nextPageToken"] as? String
         } while page != nil
         var recipients: [SentMail] = []
+        var sentComplete = true
         do {
             recipients = try await sentMail(sent)
         } catch {
+            // The inbox still goes ahead; the cursor stays so Dara's replies are read next time.
             NSLog("TodoAgent: reading sent mail failed: \(type(of: error))")
+            sentComplete = false
         }
-        return MailBatch(messages: try await messages(inbox), sent: recipients, cursor: latest)
+        return MailBatch(messages: try await messages(inbox), sent: recipients, sentComplete: sentComplete, cursor: latest)
     }
 
-    /// Who each sent message went to, and when: the To and Cc headers only.
+    /// Who each sent message went to, when, and on which thread: the To and Cc headers only.
     private func sentMail(_ ids: [String]) async throws -> [SentMail] {
         let metadata = [URLQueryItem(name: "format", value: "metadata")]
             + ["To", "Cc"].map { URLQueryItem(name: "metadataHeaders", value: $0) }
@@ -118,7 +121,7 @@ final class GmailSource: MailSource {
                     .compactMap { $0["value"] as? String }
                     .flatMap { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
                 let at = (json["internalDate"] as? String).flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
-                sent.append(SentMail(to: to, at: at))
+                sent.append(SentMail(to: to, at: at, threadID: json["threadId"] as? String))
             } catch Failure.http(404) {
                 continue
             }

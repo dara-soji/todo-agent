@@ -204,7 +204,7 @@ extension SQLiteStore: AssistantStore {
             log: readable(LogEntry.self, try rows("SELECT id, json FROM operation_log ORDER BY at, rowid;", columns: 2)),
             settings: Settings(
                 guardrailRules: try loadGuardrailRules(), neutrals: try loadNeutrals(), exclusions: try loadExclusions(),
-                vips: try loadVIPs()),
+                vips: try loadVIPs(), noiseSenders: try loadNoiseSenders()),
             suggestions: readable(Suggestion.self, try rows("SELECT thread_id, json FROM suggestions;", columns: 2)),
             mailCursor: try readSetting(Self.mailCursorKey),
             digest: readable(DigestLine.self, try rows("SELECT thread_id, json FROM digest;", columns: 2)),
@@ -250,6 +250,7 @@ extension SQLiteStore: AssistantStore {
     /// Gmail's history id, stored as the plain string.
     private static let mailCursorKey = "mail_cursor"
     private static let vipsKey = "vips"
+    private static let noiseSendersKey = "noise_senders"
     /// When Dara last emailed each address: who, never what.
     private static let recipientsKey = "recent_recipients"
     private static let neutralsKey = "neutrals"
@@ -279,6 +280,12 @@ extension SQLiteStore: AssistantStore {
         return readable([String].self, [[Self.vipsKey, json]]).first ?? []
     }
 
+    /// Unreadable, "never from" senders are logged and skipped: their mail is triaged again.
+    private func loadNoiseSenders() throws -> [String] {
+        guard let json = try readSetting(Self.noiseSendersKey) else { return [] }
+        return readable([String].self, [[Self.noiseSendersKey, json]]).first ?? []
+    }
+
     private func readSetting(_ key: String) throws -> String? {
         try rows("SELECT key, json FROM settings;", columns: 2).first { $0[0] == key }?[1]
     }
@@ -305,6 +312,7 @@ extension SQLiteStore: AssistantStore {
                 try writeSetting(Self.neutralsKey, try encode(settings.neutrals))
                 try writeSetting(Self.exclusionsKey, try encode(settings.exclusions))
                 try writeSetting(Self.vipsKey, try encode(settings.vips))
+                try writeSetting(Self.noiseSendersKey, try encode(settings.noiseSenders))
             }
             for task in change.tasks {
                 try execute("""

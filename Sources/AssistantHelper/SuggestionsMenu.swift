@@ -26,6 +26,9 @@ final class SuggestionsMenu: NSObject {
             let actions = NSMenu()
             actions.addItem(action("Accept", #selector(accept(_:)), suggestion))
             actions.addItem(action("Dismiss", #selector(dismiss(_:)), suggestion))
+            if suggestion.from != nil {
+                actions.addItem(action("Dismiss · never from this sender", #selector(dismissNever(_:)), suggestion))
+            }
             actions.addItem(action("Open in Gmail", #selector(open(_:)), suggestion))
             entry.submenu = actions
             menu.addItem(entry)
@@ -72,8 +75,26 @@ final class SuggestionsMenu: NSObject {
         let add = NSMenuItem(title: "Add a VIP…", action: #selector(addVIP), keyEquivalent: "")
         add.target = self
         menu.addItem(add)
+        if !assistant.noiseSenders.isEmpty {
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Never from (sent to Noise)", action: nil, keyEquivalent: "").isEnabled = false
+            for sender in assistant.noiseSenders {
+                let entry = NSMenuItem(title: sender, action: nil, keyEquivalent: "")
+                entry.submenu = NSMenu()
+                let forget = NSMenuItem(title: "Triage again", action: #selector(forgetNoise(_:)), keyEquivalent: "")
+                forget.target = self
+                forget.representedObject = sender
+                entry.submenu?.addItem(forget)
+                menu.addItem(entry)
+            }
+        }
         root.submenu = menu
         return root
+    }
+
+    @objc private func forgetNoise(_ sender: NSMenuItem) {
+        guard let address = sender.representedObject as? String else { return }
+        Attempt.run("Couldn't change it", then: onChange) { try assistant.forgetNoiseSender(address) }
     }
 
     /// "Sam" from "Sam <sam@work.example>", else the address.
@@ -168,6 +189,11 @@ final class SuggestionsMenu: NSObject {
     @objc private func dismiss(_ sender: NSMenuItem) {
         guard let box = sender.representedObject as? SuggestionBox else { return }
         Attempt.run("Couldn't dismiss it", then: onChange) { try assistant.dismissSuggestion(box.suggestion.id) }
+    }
+
+    @objc private func dismissNever(_ sender: NSMenuItem) {
+        guard let box = sender.representedObject as? SuggestionBox else { return }
+        Attempt.run("Couldn't dismiss it", then: onChange) { try assistant.dismissSuggestion(box.suggestion.id, neverFromSender: true) }
     }
 
     @objc private func open(_ sender: NSMenuItem) {

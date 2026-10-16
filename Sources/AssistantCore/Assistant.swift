@@ -44,6 +44,7 @@ public final class Assistant {
         case unknownDigestLine(String)
         case notAVIP(String)
         case alreadyVIP(String)
+        case notANoiseSender(String)
     }
 
     /// Idle this long, outside a matching meeting, and Dara is Away.
@@ -392,7 +393,7 @@ public final class Assistant {
             }
             && operation.before.suggestions.allSatisfy { suggestion in
                 operation.creates.contains(suggestion.id.rawValue)
-                    ? suggestionsByThread[suggestion.threadID] == nil : suggestionsByThread[suggestion.threadID] == suggestion
+                    ? suggestionsByThread[suggestion.threadID] == nil : isSame(suggestion)
             }
             && operation.before.digest.allSatisfy { digestByThread[$0.threadID] == $0 }
             && (operation.before.settings.map { $0 == settings } ?? true)
@@ -402,9 +403,16 @@ public final class Assistant {
     private func isCurrent(_ change: Change) -> Bool {
         change.tasks.allSatisfy { tasksByID[$0.id] == $0 }
             && change.projects.allSatisfy { projectsByID[$0.id] == $0 }
-            && change.suggestions.allSatisfy { suggestionsByThread[$0.threadID] == $0 }
+            && change.suggestions.allSatisfy(isSame)
             && change.digest.allSatisfy { digestByThread[$0.threadID] == $0 }
             && (change.settings.map { $0 == settings } ?? true)
+    }
+
+    /// The thread's Suggestion is still this one, in this state. Triage's bookkeeping on it (the
+    /// latest message, Dara's replies) doesn't count as a change.
+    private func isSame(_ suggestion: Suggestion) -> Bool {
+        guard let current = suggestionsByThread[suggestion.threadID] else { return false }
+        return current.id == suggestion.id && current.status == suggestion.status && current.title == suggestion.title
     }
 
     // MARK: Tiers
