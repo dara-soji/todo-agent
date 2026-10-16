@@ -368,12 +368,13 @@ final class FakeTriager: EmailTriager {
         await triage.run()
 
         mail.nextCursor = "h2"
-        mail.messages = [email("Invoice"), email("Breaks")]
+        let batch = [email("Invoice"), email("Breaks")]
+        mail.messages = batch
         triager.failOn = "Breaks"
         await triage.run()
 
         triager.failOn = nil
-        mail.messages = [email("Invoice"), email("Breaks")]
+        mail.messages = batch  // Gmail hands the same messages out again from the old cursor.
         await triage.run()
 
         #expect(mail.cursorsAskedFor == [nil, "h1", "h1"])

@@ -45,6 +45,8 @@ public enum Decision: Equatable, Sendable {
     case isThis(Project.ID)
     /// Skipped three times: Snooze till tomorrow, Drop it, or Keep it.
     case skippedThreeTimes(Task.ID)
+    /// Dara replied on the Task's email thread: "Done?" Done / Not yet.
+    case isItDone(Task.ID)
 }
 
 /// How Next is chosen: an interrupted Task comes back first; otherwise candidates that fit the next

@@ -69,6 +69,13 @@ final class TasksMenu: NSObject {
                 item.submenu?.addItem(menuItem("Drop it", #selector(drop(_:)), id))
                 item.submenu?.addItem(menuItem("Keep it", #selector(keep(_:)), id))
                 return item
+            case let .isItDone(id):
+                guard let task = assistant.task(id) else { return nil }
+                let item = NSMenuItem(title: "You replied: done with “\(task.title)”?", action: nil, keyEquivalent: "")
+                item.submenu = NSMenu()
+                item.submenu?.addItem(menuItem("Done", #selector(complete(_:)), id))
+                item.submenu?.addItem(menuItem("Not yet", #selector(notYet(_:)), id))
+                return item
             }
         }
     }
@@ -215,6 +222,11 @@ final class TasksMenu: NSObject {
     }
 
     private static func label(_ task: Task) -> String {
+        let label = statusLabel(task)
+        return task.hasNewReply ? "\(label) · new reply" : label
+    }
+
+    private static func statusLabel(_ task: Task) -> String {
         switch task.status {
         case .committed: "▸ \(task.title)"
         case .snoozed(_, let note?): "\(task.title) — waiting: \(note)"
@@ -232,6 +244,7 @@ final class TasksMenu: NSObject {
     @objc private func restore(_ sender: NSMenuItem) { attempt(sender) { try assistant.restoreTask($0) } }
     @objc private func skip(_ sender: NSMenuItem) { attempt(sender) { try assistant.skipTask($0) } }
     @objc private func keep(_ sender: NSMenuItem) { attempt(sender) { try assistant.keepTask($0) } }
+    @objc private func notYet(_ sender: NSMenuItem) { attempt(sender) { assistant.notDoneYet($0) } }
 
     @objc private func snoozeHour(_ sender: NSMenuItem) {
         attempt(sender) { try assistant.snoozeTask($0, forHours: 1) }

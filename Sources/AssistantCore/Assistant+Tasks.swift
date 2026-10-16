@@ -153,7 +153,11 @@ extension Assistant {
 
     /// Choices waiting for Dara in the menu: Asks to confirm first, then Tasks skipped three times.
     public var decisions: [Decision] {
-        asks.filter { $0.expires > clock.now }.map { .confirm($0.id) } + offerDecision + guessDecision + (newTaskTitle.map { [.newTask($0)] } ?? []) + tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }.map { .skippedThreeTimes($0.id) }
+        let confirms: [Decision] = asks.filter { $0.expires > clock.now }.map { .confirm($0.id) }
+        let newTask: [Decision] = newTaskTitle.map { [.newTask($0)] } ?? []
+        let skipped: [Decision] = tasks.filter { $0.status == .open && $0.skipCount >= Self.skipsBeforeAsking }
+            .map { .skippedThreeTimes($0.id) }
+        return confirms + offerDecision + guessDecision + newTask + skipped + doneDecisions
     }
 
     /// Moves the Task to the Deleted list, where it can be restored. A committed Task stops being committed.

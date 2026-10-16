@@ -122,6 +122,8 @@ public final class Assistant {
     public private(set) var mailCursor: String?
     /// Digest lines by thread, cleared ones included until their day is up.
     private(set) var digestByThread: [String: DigestLine]
+    /// Tasks whose thread Dara replied on, waiting for "Done?". Kept in memory only.
+    var doneQuestions: [Task.ID] = []
     /// When Dara last emailed each address, for the last 90 days.
     private(set) var recipients: [String: Date]
     /// Today's API spend, read from the audit log once a day and added to as calls are made.

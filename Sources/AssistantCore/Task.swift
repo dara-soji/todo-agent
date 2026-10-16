@@ -51,12 +51,19 @@ public struct Task: Identifiable, Equatable, Sendable, Codable {
     public var skippedUntil: Date?
     /// Skips since Dara last decided about it. The third asks what to do.
     public var skipCount: Int
+    /// Dara (or Claude Code for Dara) set the title: a Source update never overwrites it.
+    public var titleSetByDara: Bool
+    /// A new message arrived on its email thread since Dara last replied.
+    public var hasNewReply: Bool
 
     init(
         id: ID, title: String, source: Source, backLink: String?, status: Status, created: Date, deadline: Date?,
         project: Project.ID?, effort: Effort?, kind: Kind?, resumeAfterInterruption: Bool = false,
-        deletedAt: Date? = nil, skippedUntil: Date? = nil, skipCount: Int = 0
+        deletedAt: Date? = nil, skippedUntil: Date? = nil, skipCount: Int = 0, titleSetByDara: Bool = false,
+        hasNewReply: Bool = false
     ) {
+        self.titleSetByDara = titleSetByDara
+        self.hasNewReply = hasNewReply
         self.id = id
         self.title = title
         self.source = source
@@ -90,7 +97,9 @@ public struct Task: Identifiable, Equatable, Sendable, Codable {
             resumeAfterInterruption: try c.decodeIfPresent(Bool.self, forKey: .resumeAfterInterruption) ?? false,
             deletedAt: try c.decodeIfPresent(Date.self, forKey: .deletedAt),
             skippedUntil: try c.decodeIfPresent(Date.self, forKey: .skippedUntil),
-            skipCount: try c.decodeIfPresent(Int.self, forKey: .skipCount) ?? 0)
+            skipCount: try c.decodeIfPresent(Int.self, forKey: .skipCount) ?? 0,
+            titleSetByDara: try c.decodeIfPresent(Bool.self, forKey: .titleSetByDara) ?? false,
+            hasNewReply: try c.decodeIfPresent(Bool.self, forKey: .hasNewReply) ?? false)
     }
 }
 
@@ -121,7 +130,10 @@ public struct TaskDraft: Sendable {
 /// An edit to a Task's fields. A nil field is left alone; `.some(nil)` clears an optional one.
 public struct TaskChanges: Sendable {
     func apply(to task: inout Task) {
-        if let title { task.title = title }
+        if let title {
+            task.title = title
+            task.titleSetByDara = true
+        }
         if let deadline { task.deadline = deadline }
         if let project { task.project = project }
         if let effort { task.effort = effort }

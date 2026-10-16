@@ -105,7 +105,7 @@ final class GmailSource: MailSource {
         return MailBatch(messages: try await messages(inbox), sent: recipients, cursor: latest)
     }
 
-    /// Who each sent message went to, and when: the To and Cc headers only.
+    /// Who each sent message went to, when, and on which thread: the To and Cc headers only.
     private func sentMail(_ ids: [String]) async throws -> [SentMail] {
         let metadata = [URLQueryItem(name: "format", value: "metadata")]
             + ["To", "Cc"].map { URLQueryItem(name: "metadataHeaders", value: $0) }
@@ -118,7 +118,7 @@ final class GmailSource: MailSource {
                     .compactMap { $0["value"] as? String }
                     .flatMap { $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
                 let at = (json["internalDate"] as? String).flatMap(Double.init).map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
-                sent.append(SentMail(to: to, at: at))
+                sent.append(SentMail(to: to, at: at, threadID: json["threadId"] as? String))
             } catch Failure.http(404) {
                 continue
             }

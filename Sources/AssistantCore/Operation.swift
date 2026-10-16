@@ -33,6 +33,9 @@ public enum OperationKind: String, Sendable, Codable, CaseIterable {
     /// Dara turning a Digest line into a Suggestion.
     case promoteDigestLine
     case addVIP, removeVIP
+    /// The helper bringing a Task up to date with its Source (a new reply, a changed row); never
+    /// over a title Dara set.
+    case sourceUpdate
     case undo
     /// Dara tightening or loosening a tier.
     case changeGuardrail
@@ -66,7 +69,7 @@ public struct Guardrail {
     /// Dara may tighten anything except changing tiers itself, what the helper does on its own, and
     /// "Treat as Neutral" and "Exclude", which apply straight away.
     public static func canTighten(_ kind: OperationKind) -> Bool {
-        ![.changeGuardrail, .wakeTask, .markNeutral, .addExclusion].contains(kind)
+        ![.changeGuardrail, .wakeTask, .markNeutral, .addExclusion, .sourceUpdate].contains(kind)
     }
 
     /// Only an Ask Operation can be loosened, and only to Auto. Removing an exclusion always asks:
@@ -101,10 +104,14 @@ public struct Settings: Equatable, Sendable, Codable {
     public var exclusions: [Exclusion]
     /// Senders whose mail skips the bulk rules: addresses, or "@domain".
     public var vips: [String]
+    /// "Never from this sender": their mail is Noise, without asking the model.
+    public var noiseSenders: [String]
 
     public init(
-        guardrailRules: [GuardrailRule] = [], neutrals: [NeutralKey] = [], exclusions: [Exclusion] = [], vips: [String] = []
+        guardrailRules: [GuardrailRule] = [], neutrals: [NeutralKey] = [], exclusions: [Exclusion] = [], vips: [String] = [],
+        noiseSenders: [String] = []
     ) {
+        self.noiseSenders = noiseSenders
         self.guardrailRules = guardrailRules
         self.neutrals = neutrals
         self.exclusions = exclusions
@@ -118,7 +125,8 @@ public struct Settings: Equatable, Sendable, Codable {
             guardrailRules: try c.decode([GuardrailRule].self, forKey: .guardrailRules),
             neutrals: try c.decode([NeutralKey].self, forKey: .neutrals),
             exclusions: try c.decode([Exclusion].self, forKey: .exclusions),
-            vips: try c.decodeIfPresent([String].self, forKey: .vips) ?? [])
+            vips: try c.decodeIfPresent([String].self, forKey: .vips) ?? [],
+            noiseSenders: try c.decodeIfPresent([String].self, forKey: .noiseSenders) ?? [])
     }
 }
 
