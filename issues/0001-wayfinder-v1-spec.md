@@ -2,7 +2,7 @@
 id: 1
 title: "Map: personal work assistant — v1 spec"
 labels: [wayfinder:map]
-status: open
+status: closed
 assignee:
 ---
 
@@ -47,3 +47,9 @@ A **v1 spec** for a personal Mac assistant for Dara. The spec is ready to hand t
 ## Out of scope
 
 - Multiple users, accounts, other platforms (Windows, mobile), or distributing or selling the app.
+
+## Comments
+
+### 2026-10-17 — dara
+
+**Resolution.** The map reached its destination. Tickets 2–10 closed, the v1 spec was written as issue 11, and v1 was built and merged in 19 slices. *Not yet specified* items (acting layer, voice, learning support, daily rhythm, history) carry forward as candidates for a v2 map.

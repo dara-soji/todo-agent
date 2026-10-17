@@ -2,7 +2,7 @@
 id: 11
 title: "Spec: personal work assistant v1 (helper + Now/Next + Tasks + Triage)"
 labels: [ready-for-agent]
-status: open
+status: closed
 assignee:
 blocked_by: []
 ---
@@ -262,3 +262,9 @@ Every state-changing **Operation**, whoever starts it, passes through the helper
 - Research findings that informed this spec are on branches `research/macos-activity-signals`, `research/gmail-sheets-notes-access` and `research/build-options`.
 - Glossary discipline: avoid "important email", "todo", "current task", "audit log" (for the Operation log) and "action" (for an Operation), per `CONTEXT.md`.
 - Open confirmation carried over from the map: Dara to confirm Apple Notes is the notes app in use.
+
+## Comments
+
+### 2026-10-17 — dara
+
+**Resolution.** v1 is built. All 19 slices merged to `main` (GitHub #2–#20, PRs #21–#39), from the walking skeleton through first-run setup and log retention. The suite passes (421 tests). Items under *Out of Scope* stay out and can be picked up as new specs.
