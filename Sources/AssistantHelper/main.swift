@@ -239,4 +239,5 @@ let app = NSApplication.shared
 let delegate = HelperDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
+EditMenu.install(in: app)
 app.run()
