@@ -1,8 +1,9 @@
 import Foundation
 import Security
 
-/// One secret in the data-protection keychain, which honours the accessibility class and doesn't tie
-/// the item to this build's ad-hoc signature (so rebuilding the helper keeps it).
+/// One secret in the login keychain. Not the data-protection keychain: that needs a team-signed
+/// keychain-access-groups entitlement, and this ad-hoc-signed build gets errSecMissingEntitlement (-34018).
+/// The item's access is tied to the build's signature, so after a rebuild macOS asks once to allow it.
 struct KeychainItem {
     let account: String
     private static let service = "com.dara.todo-agent.helper"
@@ -22,7 +23,6 @@ struct KeychainItem {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: account,
-            kSecUseDataProtectionKeychain as String: true,
         ]
     }
 
