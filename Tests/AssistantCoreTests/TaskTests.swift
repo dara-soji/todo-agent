@@ -45,6 +45,46 @@ import AssistantTestSupport
         #expect(throws: Assistant.Failure.emptyTitle) { try assistant.quickAdd("   ") }
     }
 
+    // MARK: Voice quick-add
+
+    @Test func aSpokenTaskIsTheVerbatimTranscriptInNowsProject() throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+
+        let task = try assistant.addSpoken("  um I need to email Sam about the deck ")
+
+        #expect(task.title == "um I need to email Sam about the deck")
+        #expect(task.source == .byHand)
+        #expect(task.project == todo.id)
+        #expect(assistant.tasks.map(\.id) == [task.id])
+    }
+
+    @Test func theTranscriptIsInTheOperationLog() throws {
+        let assistant = makeAssistant()
+        _ = try assistant.addSpoken("Email Sam about the deck")
+
+        let entry = try #require(assistant.operationLog.last)
+        #expect(entry.kind == .addTask)
+        #expect(entry.startedBy == .dara)
+        #expect(entry.summary == "Added by voice “Email Sam about the deck”")
+    }
+
+    @Test func aSpokenTaskCanBeUndone() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.addSpoken("Email Sam")
+
+        try assistant.undo(try #require(assistant.operationLog.last).id)
+
+        #expect(assistant.tasks.isEmpty)
+        #expect(assistant.deletedTasks.map(\.id) == [task.id])
+    }
+
+    @Test func silenceAddsNothing() {
+        let assistant = makeAssistant()
+        #expect(throws: Assistant.Failure.emptyTitle) { try assistant.addSpoken(" \n ") }
+        #expect(assistant.operationLog.isEmpty)
+    }
+
     @Test func quickAddAndStartCommitsTheTaskAndMarksTheOldOneToResume() throws {
         let assistant = makeAssistant()
         let first = try assistant.quickAdd("Refactor the store", start: true)

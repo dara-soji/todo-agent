@@ -246,7 +246,7 @@ Every state-changing **Operation**, whoever starts it, passes through the helper
 ## Out of Scope
 
 - **Acting layer**: opening apps, repos and files, filing notes, editing Sheets, drafting or sending email, calendar writes, and any screen control, including the choice between a Pro/Max plan for Claude Code computer use and the API computer-use tool in the helper. Tiers for these are already recorded in ADR 0002, but no tools ship in v1. Gmail and Sheets stay read-only (`gmail.compose` is not requested).
-- **Voice**: push-to-talk, wake word, speech-to-text.
+- **Voice**: push-to-talk, wake word, speech-to-text. (Push-to-talk quick-add is now specified in issue 12.)
 - **Learning support beyond an ordinary Project**: study plans, progress tracking, "next lesson" as a Next.
 - **Daily rhythm features**: a structured morning plan and end-of-day review flow, beyond whatever Claude Code can already do conversationally over the v1 MCP tools.
 - **History features**: timesheets, weekly summaries or reviews built on Now history. v1 only records it.

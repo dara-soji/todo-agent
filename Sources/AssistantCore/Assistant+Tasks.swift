@@ -36,6 +36,15 @@ extension Assistant {
         return tasksByID[task.id] ?? task
     }
 
+    /// Voice quick-add: one Task titled with the transcript as heard, in Now's confident Project.
+    /// The Operation log keeps the transcript.
+    @discardableResult
+    public func addSpoken(_ transcript: String) throws -> Task {
+        let task = try newTask(TaskDraft(title: transcript, project: now.confidentProject))
+        try perform(.addTask, "Added by voice “\(task.title)”", by: .dara, writing: Change(tasks: [task]))
+        return task
+    }
+
     @discardableResult
     public func addTask(_ draft: TaskDraft, by startedBy: StartedBy = .dara) throws -> Task {
         let task = try newTask(draft)

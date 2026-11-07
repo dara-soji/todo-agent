@@ -1,6 +1,7 @@
 import AppKit
 
 /// The ⌥Space palette: type a Task, ↩ to add it to Now's Project, ⌘↩ to add and start it, esc to close.
+/// While ⌥Space is held it shows "Listening…" and the live transcript instead.
 @MainActor
 final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     private final class KeyablePanel: NSPanel {
@@ -22,7 +23,8 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     private var previousApp: NSRunningApplication?
     private let heading = NSTextField(labelWithString: "")
     private let field = NSTextField()
-    private let hint = NSTextField(labelWithString: "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE")
+    private static let typingHint = "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE"
+    private let hint = NSTextField(labelWithString: typingHint)
     /// Called with the title and whether to start it.
     var onSubmit: (String, Bool) -> Void = { _, _ in }
 
@@ -37,8 +39,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.placeholderAttributedString = NSAttributedString(
-            string: "What needs doing?", attributes: [.foregroundColor: Theme.steel, .font: Theme.display(18)])
+        restorePlaceholder()
         field.delegate = self
         hint.font = Theme.mono(9)
         hint.textColor = Theme.steel
@@ -64,13 +65,52 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     func show(destination: String) {
         heading.attributedStringValue = Theme.label("Add task → \(destination)", color: Theme.accent)
         field.stringValue = ""
-        if let screen = NSScreen.main?.visibleFrame {
-            panel.setFrameOrigin(NSPoint(x: screen.midX - panel.frame.width / 2, y: screen.maxY - screen.height / 3))
-        }
+        field.isEditable = true
+        field.lineBreakMode = .byClipping
+        restorePlaceholder()
+        hint.stringValue = Self.typingHint
+        position()
         previousApp = NSWorkspace.shared.frontmostApplication
         NSApp.activate()
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(field)
+    }
+
+    /// Push-to-talk: shown without taking focus, so the app Dara is in keeps it.
+    func showListening(destination: String) {
+        heading.attributedStringValue = Theme.label("Add task → \(destination)", color: Theme.accent)
+        field.stringValue = ""
+        field.placeholderAttributedString = NSAttributedString(
+            string: "Listening…", attributes: [.foregroundColor: Theme.steel, .font: Theme.display(18)])
+        field.isEditable = false
+        // Keep the latest words in view as the transcript grows.
+        field.lineBreakMode = .byTruncatingHead
+        hint.stringValue = "RELEASE ⌥SPACE TO ADD"
+        position()
+        previousApp = nil
+        panel.orderFrontRegardless()
+    }
+
+    /// The live transcript while listening.
+    func showTranscript(_ text: String) {
+        field.stringValue = text
+    }
+
+    /// Closes the Listening state once the recording is done.
+    func hideListening() {
+        panel.orderOut(nil)
+        restorePlaceholder()
+    }
+
+    private func restorePlaceholder() {
+        field.placeholderAttributedString = NSAttributedString(
+            string: "What needs doing?", attributes: [.foregroundColor: Theme.steel, .font: Theme.display(18)])
+    }
+
+    private func position() {
+        if let screen = NSScreen.main?.visibleFrame {
+            panel.setFrameOrigin(NSPoint(x: screen.midX - panel.frame.width / 2, y: screen.maxY - screen.height / 3))
+        }
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
