@@ -25,6 +25,8 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     private let field = NSTextField()
     private static let typingHint = "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE"
     private let hint = NSTextField(labelWithString: typingHint)
+    /// True from Listening… until the recording's Tasks are added (or the typing box opens).
+    private(set) var isListening = false
     /// Called with the title and whether to start it.
     var onSubmit: (String, Bool) -> Void = { _, _ in }
 
@@ -63,6 +65,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
 
     /// `destination` names where ↩ will put the Task, e.g. "TODO-AGENT" or "NO PROJECT".
     func show(destination: String) {
+        isListening = false
         heading.attributedStringValue = Theme.label("Add task → \(destination)", color: Theme.accent)
         field.stringValue = ""
         field.isEditable = true
@@ -86,6 +89,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         // Keep the latest words in view as the transcript grows.
         field.lineBreakMode = .byTruncatingHead
         hint.stringValue = "RELEASE ⌥SPACE TO ADD"
+        isListening = true
         position()
         previousApp = nil
         panel.orderFrontRegardless()
@@ -96,8 +100,16 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         field.stringValue = text
     }
 
-    /// Closes the Listening state once the recording is done.
+    /// Released: the transcript stays in view while it is split into Tasks.
+    func showAdding() {
+        guard isListening else { return }
+        hint.stringValue = "ADDING…"
+    }
+
+    /// Closes the Listening state once the recording's Tasks are added. Leaves a typing box alone.
     func hideListening() {
+        guard isListening else { return }
+        isListening = false
         panel.orderOut(nil)
         restorePlaceholder()
     }

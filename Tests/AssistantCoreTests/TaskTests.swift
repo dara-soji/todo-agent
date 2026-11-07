@@ -51,7 +51,7 @@ import AssistantTestSupport
         let assistant = makeAssistant()
         let todo = try onTodoAgent(assistant)
 
-        let task = try assistant.addSpoken("  um I need to email Sam about the deck ")
+        let task = try #require(try assistant.addSpoken("  um I need to email Sam about the deck ").first)
 
         #expect(task.title == "um I need to email Sam about the deck")
         #expect(task.source == .byHand)
@@ -71,7 +71,7 @@ import AssistantTestSupport
 
     @Test func aSpokenTaskCanBeUndone() throws {
         let assistant = makeAssistant()
-        let task = try assistant.addSpoken("Email Sam")
+        let task = try #require(try assistant.addSpoken("Email Sam").first)
 
         try assistant.undo(try #require(assistant.operationLog.last).id)
 

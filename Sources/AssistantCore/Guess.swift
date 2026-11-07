@@ -27,6 +27,8 @@ public struct GuessRequest: Equatable, Sendable {
 public struct APICall: Equatable, Sendable, Codable {
     public enum Purpose: String, Sendable, Codable {
         case projectGuess, nextTieBreak, triage
+        /// Splitting a voice quick-add transcript into Task titles.
+        case voiceSplit
     }
 
     /// What kind of content was sent, never the content itself.
@@ -36,6 +38,8 @@ public struct APICall: Equatable, Sendable, Codable {
         case taskDetails
         /// One email's sender, subject and the start of its plain text.
         case emailExcerpt
+        /// One voice quick-add transcript, as heard.
+        case transcript
     }
 
     public let at: Date

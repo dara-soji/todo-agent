@@ -210,7 +210,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let task = try assistant.quickAdd(title, start: start)
-                showAdded(task, started: start, assistant, changed: changed)
+                showAdded([task], started: start, assistant, changed: changed)
             } catch {
                 NSSound.beep()
             }
@@ -255,11 +255,16 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             listeningShown = false
             // A release can beat the timer; the Listening state then never showed.
             voice.finish { [weak self] transcript in
-                guard let self else { return }
-                quickAdd.hideListening()
-                // Silence adds nothing.
-                guard let task = try? assistant.addSpoken(transcript) else { return }
-                showAdded(task, started: false, assistant, changed: changed)
+                guard let self, let modelCalls else { return }
+                quickAdd.showAdding()
+                _Concurrency.Task {
+                    // Haiku splits it into Tasks, or on any failure it is one verbatim Task.
+                    // Silence adds nothing.
+                    let tasks = try? await modelCalls.voiceSplit.add(transcript)
+                    self.quickAdd.hideListening()
+                    guard let tasks, !tasks.isEmpty else { return }
+                    self.showAdded(tasks, started: false, assistant, changed: changed)
+                }
             }
         case .finishListening? where !holdHandled:
             // Held without voice, released before the timer could open the typing box.
@@ -269,15 +274,19 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The Added panel, whose Undo reverses the Operation that just added `task`.
-    private func showAdded(_ task: AssistantCore.Task, started: Bool, _ assistant: Assistant, changed: @escaping () -> Void) {
+    /// The Added panel, whose Undo reverses the one Operation that just added `tasks`. With several
+    /// (a split recording), Start starts the first.
+    private func showAdded(_ tasks: [AssistantCore.Task], started: Bool, _ assistant: Assistant, changed: @escaping () -> Void) {
+        guard let first = tasks.first else { return }
         let entry = assistant.operationLog.last
         changed()
-        let destination = Self.destination(task.project, in: assistant)
+        let destination = Self.destination(first.project, in: assistant)
+        let heading = started
+            ? "Started “\(first.title)” · \(destination)"
+            : tasks.count == 1 ? "Added “\(first.title)” · \(destination)" : "Added \(tasks.count) Tasks · \(destination)"
         added.show(
-            started ? "Started “\(task.title)” · \(destination)" : "Added “\(task.title)” · \(destination)",
-            started: started,
-            onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(task.id, asInterruption: true) } },
+            heading, items: tasks.count == 1 ? [] : tasks.map(\.title), started: started,
+            onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(first.id, asInterruption: true) } },
             onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry.id) } } })
     }
 

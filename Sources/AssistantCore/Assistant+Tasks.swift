@@ -36,13 +36,21 @@ extension Assistant {
         return tasksByID[task.id] ?? task
     }
 
-    /// Voice quick-add: one Task titled with the transcript as heard, in Now's confident Project.
-    /// The Operation log keeps the transcript.
+    /// Voice quick-add: the Tasks heard in one recording, added as **one** Operation, so one Undo
+    /// removes them all. Each goes to Now's confident Project. With no `tasks` (no split), the
+    /// transcript as heard is the one Task. The Operation log keeps the transcript.
     @discardableResult
-    public func addSpoken(_ transcript: String) throws -> Task {
-        let task = try newTask(TaskDraft(title: transcript, project: now.confidentProject))
-        try perform(.addTask, "Added by voice “\(task.title)”", by: .dara, writing: Change(tasks: [task]))
-        return task
+    public func addSpoken(_ transcript: String, as tasks: [SpokenTask] = []) throws -> [Task] {
+        let transcript = try Self.nonEmpty(transcript, else: .emptyTitle)
+        let project = now.confidentProject
+        let drafts = tasks.isEmpty ? [SpokenTask(title: transcript)] : tasks
+        let added = try drafts.map { try newTask(TaskDraft(title: $0.title, project: project)) }
+        let summary = tasks.isEmpty
+            ? "Added by voice “\(transcript)”"
+            : "Added \(added.count) \(added.count == 1 ? "Task" : "Tasks") by voice “\(transcript)”: "
+                + added.map { "“\($0.title)”" }.joined(separator: ", ")
+        try perform(.addTask, summary, by: .dara, writing: Change(tasks: added))
+        return added
     }
 
     @discardableResult
