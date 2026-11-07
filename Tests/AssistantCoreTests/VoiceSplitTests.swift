@@ -8,6 +8,8 @@ import AssistantTestSupport
 final class FakeSplitter: TranscriptSplitter {
     var seen: [SplitRequest] = []
     var titles: (String) -> [String] = { [$0] }
+    /// The Project label answered, if any.
+    var project: String?
     var fails = false
     var refuses = false
     /// Never answers, as a call that hangs would.
@@ -26,7 +28,7 @@ final class FakeSplitter: TranscriptSplitter {
         if fails { throw URLError(.notConnectedToInternet) }
         if refuses { throw Refused(call: Self.call) }
         if hangs { try await _Concurrency.Task.sleep(for: .seconds(60)) }
-        return SplitAnswer(titles: titles(request.transcript), call: Self.call)
+        return SplitAnswer(titles: titles(request.transcript), project: project, call: Self.call)
     }
 }
 
@@ -45,33 +47,46 @@ final class FakeSplitter: TranscriptSplitter {
         VoiceSplitRunner(assistant: assistant, splitter: splitter, timeout: timeout)
     }
 
-    // MARK: Splitting
-
-    @Test func oneRecordingBecomesSeveralTasksInNowsProject() async throws {
-        let assistant = makeAssistant()
+    func onTodoAgent(_ assistant: Assistant) throws -> Project {
         let todo = try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
         assistant.receive(.activeWindow(app: code, windowTitle: "~/code/todo-agent"))
+        return todo
+    }
+
+    // MARK: Splitting
+
+    @Test func oneRecordingBecomesSeveralTasksInTheCapturedProject() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
         splitter.titles = { _ in ["Email Sam about the deck", "Book the dentist"] }
 
-        let tasks = try await runner(assistant).add("um I need to email Sam about the deck and uh book the dentist")
+        let tasks = try await runner(assistant).add("um I need to email Sam about the deck and uh book the dentist", otherwise: todo.id)
 
         #expect(tasks.map(\.title) == ["Email Sam about the deck", "Book the dentist"])
         #expect(tasks.allSatisfy { $0.project == todo.id && $0.source == .byHand && $0.status == .open })
         #expect(Set(assistant.tasks.map(\.id)) == Set(tasks.map(\.id)))
     }
 
-    @Test func onlyTheTranscriptIsSent() async throws {
+    @Test func onlyTheTranscriptAndActiveProjectNamesAreSent() async throws {
         let assistant = makeAssistant()
+        _ = try assistant.declareProject(name: "Acme deck", matchers: [.repoPath("~/code/acme")])
+        _ = try assistant.declareProject(name: "todo-agent", matchers: [.repoPath("~/code/todo-agent")])
         _ = try assistant.declareProject(name: "Acme deck", matchers: [])
-        _ = try await runner(assistant).add("  Email Sam  ")
-        #expect(splitter.seen == [SplitRequest(transcript: "Email Sam")])
+        let old = try assistant.declareProject(name: "Old client", matchers: [])
+        try assistant.archiveProject(old.id)
+        assistant.receive(.activeWindow(app: code, windowTitle: "~/code/todo-agent — secret.swift"))
+
+        _ = try await runner(assistant).add("  Email Sam  ", otherwise: nil)
+
+        // Each name once, archived ones left out; no window, matcher or Task.
+        #expect(splitter.seen == [SplitRequest(transcript: "Email Sam", projects: ["Acme deck", "todo-agent"])])
     }
 
     @Test func theBatchIsOneOperationThatKeepsTheTranscript() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in ["Email Sam", "Book the dentist"] }
 
-        _ = try await runner(assistant).add("I need to email Sam and book the dentist")
+        _ = try await runner(assistant).add("I need to email Sam and book the dentist", otherwise: nil)
 
         #expect(assistant.operationLog.count == 1)
         let entry = try #require(assistant.operationLog.last)
@@ -83,7 +98,7 @@ final class FakeSplitter: TranscriptSplitter {
     @Test func oneUndoRemovesTheWholeBatch() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in ["Email Sam", "Book the dentist", "Water the plants"] }
-        let tasks = try await runner(assistant).add("email Sam, book the dentist, water the plants")
+        let tasks = try await runner(assistant).add("email Sam, book the dentist, water the plants", otherwise: nil)
 
         try assistant.undo(try #require(assistant.operationLog.last).id)
 
@@ -94,15 +109,110 @@ final class FakeSplitter: TranscriptSplitter {
     @Test func titlesAreTrimmedAndBlankOnesDropped() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in ["  Email Sam ", " ", ""] }
-        let tasks = try await runner(assistant).add("um email Sam")
+        let tasks = try await runner(assistant).add("um email Sam", otherwise: nil)
         #expect(tasks.map(\.title) == ["Email Sam"])
         #expect(assistant.operationLog.last?.summary == "Added 1 Task by voice “um email Sam”: “Email Sam”")
     }
 
     @Test func theCallIsMetered() async throws {
         let assistant = makeAssistant()
-        _ = try await runner(assistant).add("Email Sam")
+        _ = try await runner(assistant).add("Email Sam", otherwise: nil)
         #expect(try store.load().audit == [FakeSplitter.call])
+    }
+
+    // MARK: Naming a Project out loud
+
+    @Test func aNamedProjectGetsTheTasks() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        let acme = try assistant.declareProject(name: "Acme deck", matchers: [])
+        splitter.titles = { _ in ["Email Sam", "Fix the chart"] }
+        splitter.project = "Acme deck"
+
+        let tasks = try await runner(assistant).add("for the Acme deck, email Sam and fix the chart", otherwise: todo.id)
+
+        #expect(tasks.map(\.title) == ["Email Sam", "Fix the chart"])
+        #expect(tasks.allSatisfy { $0.project == acme.id })
+        #expect(assistant.operationLog.filter { $0.kind == .addTask }.count == 1)
+    }
+
+    @Test func theNamedProjectIsMatchedIgnoringCaseAndSpace() async throws {
+        let assistant = makeAssistant()
+        let acme = try assistant.declareProject(name: "Acme deck", matchers: [])
+        splitter.project = " acme DECK "
+        let tasks = try await runner(assistant).add("for the Acme deck, email Sam", otherwise: nil)
+        #expect(tasks.map(\.project) == [acme.id])
+    }
+
+    @Test func aNameThatMatchesNoProjectGoesToTheCapturedProject() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        let old = try assistant.declareProject(name: "Old client", matchers: [])
+        try assistant.archiveProject(old.id)
+
+        for label in ["Globex", "Old client", ""] {
+            splitter.project = label
+            let tasks = try await runner(assistant).add("for \(label), email Sam", otherwise: todo.id)
+            #expect(tasks.map(\.project) == [todo.id], "\(label)")
+        }
+    }
+
+    @Test func noProjectNamedGoesToTheCapturedProject() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        _ = try assistant.declareProject(name: "Acme deck", matchers: [])
+        splitter.project = nil
+        let tasks = try await runner(assistant).add("email Sam", otherwise: todo.id)
+        #expect(tasks.map(\.project) == [todo.id])
+    }
+
+    @Test func noProjectNamedAndNoneCapturedIsNoProject() async throws {
+        let assistant = makeAssistant()
+        _ = try onTodoAgent(assistant)
+        let tasks = try await runner(assistant).add("email Sam", otherwise: nil)
+        #expect(tasks.map(\.project) == [nil])
+    }
+
+    /// The palette's Project when recording started wins over where Now has moved since.
+    @Test func theCapturedProjectWinsOverNowAtRelease() async throws {
+        let assistant = makeAssistant()
+        let acme = try assistant.declareProject(name: "Acme deck", matchers: [.repoPath("~/code/acme")])
+        let todo = try onTodoAgent(assistant)
+        let captured = assistant.now.confidentProject
+        assistant.receive(.activeWindow(app: code, windowTitle: "~/code/acme"))
+        #expect(assistant.now.confidentProject == acme.id)
+
+        let tasks = try await runner(assistant).add("email Sam", otherwise: captured)
+
+        #expect(tasks.map(\.project) == [todo.id])
+    }
+
+    @Test func anAmbiguousNameGoesToTheCapturedProject() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        _ = try assistant.declareProject(name: "Acme", matchers: [])
+        _ = try assistant.declareProject(name: "acme", matchers: [])
+        splitter.project = "Acme"
+        let tasks = try await runner(assistant).add("for Acme, email Sam", otherwise: todo.id)
+        #expect(tasks.map(\.project) == [todo.id])
+    }
+
+    @Test func theFallbackGoesToTheCapturedProject() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        assistant.receive(.activeWindow(app: App(bundleID: "com.apple.finder", name: "Finder"), windowTitle: "Downloads"))
+        splitter.fails = true
+        let tasks = try await runner(assistant).add("for the Acme deck, email Sam", otherwise: todo.id)
+        try expectVerbatim(tasks, assistant, transcript: "for the Acme deck, email Sam")
+        #expect(tasks.map(\.project) == [todo.id])
+    }
+
+    @Test func aCapturedProjectArchivedSinceIsNoProject() async throws {
+        let assistant = makeAssistant()
+        let todo = try onTodoAgent(assistant)
+        try assistant.archiveProject(todo.id)
+        let tasks = try await runner(assistant).add("email Sam", otherwise: todo.id)
+        #expect(tasks.map(\.project) == [nil])
     }
 
     // MARK: Fallback: one verbatim Task, as in #40
@@ -116,7 +226,7 @@ final class FakeSplitter: TranscriptSplitter {
     @Test func offlineOrAnyErrorAddsTheVerbatimTranscript() async throws {
         let assistant = makeAssistant()
         splitter.fails = true
-        let tasks = try await runner(assistant).add("um email Sam")
+        let tasks = try await runner(assistant).add("um email Sam", otherwise: nil)
         try expectVerbatim(tasks, assistant, transcript: "um email Sam")
         #expect(try store.load().audit.isEmpty)
     }
@@ -124,7 +234,7 @@ final class FakeSplitter: TranscriptSplitter {
     @Test func aRefusalIsStillMeteredAndFallsBack() async throws {
         let assistant = makeAssistant()
         splitter.refuses = true
-        let tasks = try await runner(assistant).add("um email Sam")
+        let tasks = try await runner(assistant).add("um email Sam", otherwise: nil)
         try expectVerbatim(tasks, assistant, transcript: "um email Sam")
         #expect(try store.load().audit == [FakeSplitter.call])
     }
@@ -132,27 +242,27 @@ final class FakeSplitter: TranscriptSplitter {
     @Test func anEmptyListFallsBack() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in [" ", ""] }
-        let tasks = try await runner(assistant).add("um email Sam")
+        let tasks = try await runner(assistant).add("um email Sam", otherwise: nil)
         try expectVerbatim(tasks, assistant, transcript: "um email Sam")
     }
 
     @Test func tooManyTitlesIsMalformedAndFallsBack() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in (1...(VoiceSplit.taskLimit + 1)).map { "Task \($0)" } }
-        let tasks = try await runner(assistant).add("a long ramble")
+        let tasks = try await runner(assistant).add("a long ramble", otherwise: nil)
         try expectVerbatim(tasks, assistant, transcript: "a long ramble")
     }
 
     @Test func aSlowAnswerTimesOutAndFallsBack() async throws {
         let assistant = makeAssistant()
         splitter.hangs = true
-        let tasks = try await runner(assistant, timeout: .milliseconds(50)).add("um email Sam")
+        let tasks = try await runner(assistant, timeout: .milliseconds(50)).add("um email Sam", otherwise: nil)
         try expectVerbatim(tasks, assistant, transcript: "um email Sam")
     }
 
     @Test func silenceAddsNothingAndSendsNothing() async {
         let assistant = makeAssistant()
-        await #expect(throws: Assistant.Failure.emptyTitle) { try await runner(assistant).add(" \n ") }
+        await #expect(throws: Assistant.Failure.emptyTitle) { try await runner(assistant).add(" \n ", otherwise: nil) }
         #expect(splitter.seen.isEmpty)
         #expect(assistant.operationLog.isEmpty)
     }
