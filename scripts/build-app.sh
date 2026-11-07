@@ -30,6 +30,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>NSAppleEventsUsageDescription</key><string>Reads the front tab's URL so web work can match your Projects, and finds open actions in Apple Notes (Excluded folders are never read).</string>
     <key>NSScreenCaptureUsageDescription</key><string>Takes one screenshot of a window it can't place, to guess its Project. Never stored.</string>
     <key>NSCalendarsFullAccessUsageDescription</key><string>Reads today's events so meetings can match your Projects.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Listens while you hold ⌥Space so you can add a Task by voice. Audio is never stored.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>Turns what you say while holding ⌥Space into a Task, on this Mac only.</string>
 </dict>
 </plist>
 PLIST

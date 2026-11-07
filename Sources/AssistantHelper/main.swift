@@ -18,6 +18,15 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var mcpServer: AssistantMCPServer?
     private let quickAdd = QuickAddPanel()
     private let added = AddedPanel()
+    private var pushToTalk = PushToTalk(clock: SystemClock())
+    private let voice = VoiceCapture()
+    private var holdTimer: Timer?
+    /// True while a hold is being recorded; false on a tap or when voice couldn't start.
+    private var voiceRecording = false
+    /// True while the palette shows Listening…, the only time partial transcripts are shown.
+    private var listeningShown = false
+    /// True once the hold timer has acted on this press.
+    private var holdHandled = false
     private var nudgePanel: NudgePanel?
     private var modelCalls: ModelCalls?
     private var mailTriage: MailTriage?
@@ -190,23 +199,86 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setUpQuickAdd(_ assistant: Assistant, changed: @escaping () -> Void) {
-        hotKey = HotKey { [weak self] in self?.openQuickAdd(assistant) }
+        hotKey = HotKey(
+            pressed: { [weak self] in self?.quickAddPressed() },
+            released: { [weak self] in self?.quickAddReleased(assistant, changed: changed) })
+        voice.onPartial = { [weak self] text in
+            guard let self, listeningShown else { return }
+            quickAdd.showTranscript(text)
+        }
         quickAdd.onSubmit = { [weak self] title, start in
             guard let self else { return }
             do {
                 let task = try assistant.quickAdd(title, start: start)
-                let entry = assistant.operationLog.last
-                changed()
-                let destination = Self.destination(task.project, in: assistant)
-                added.show(
-                    start ? "Started “\(task.title)” · \(destination)" : "Added “\(task.title)” · \(destination)",
-                    started: start,
-                    onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(task.id, asInterruption: true) } },
-                    onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry.id) } } })
+                showAdded(task, started: start, assistant, changed: changed)
             } catch {
                 NSSound.beep()
             }
         }
+    }
+
+    /// ⌥Space down: audio starts buffering now, and a timer decides at 300 ms whether it's a hold.
+    private func quickAddPressed() {
+        guard pushToTalk.keyDown() == .startBuffering else { return }
+        voiceRecording = voice.begin()
+        holdHandled = false
+        holdTimer?.invalidate()
+        holdTimer = Timer.scheduledTimer(withTimeInterval: PushToTalk.holdThreshold, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.quickAddHeld() }
+        }
+    }
+
+    private func quickAddHeld() {
+        guard pushToTalk.holdCheck() == .startListening, let assistant else { return }
+        holdHandled = true
+        guard voiceRecording else {
+            // Voice can't run (e.g. no permission yet): the hold still opens the typing box.
+            openQuickAdd(assistant)
+            return
+        }
+        NSSound(named: "Tink")?.play()
+        quickAdd.showListening(destination: Self.destination(assistant.now.project, in: assistant))
+        quickAdd.showTranscript(voice.transcript)
+        listeningShown = true
+    }
+
+    private func quickAddReleased(_ assistant: Assistant, changed: @escaping () -> Void) {
+        holdTimer?.invalidate()
+        holdTimer = nil
+        switch pushToTalk.keyUp() {
+        case .openTypingBox?:
+            voice.cancel()
+            voiceRecording = false
+            openQuickAdd(assistant)
+        case .finishListening? where voiceRecording:
+            voiceRecording = false
+            listeningShown = false
+            // A release can beat the timer; the Listening state then never showed.
+            voice.finish { [weak self] transcript in
+                guard let self else { return }
+                quickAdd.hideListening()
+                // Silence adds nothing.
+                guard let task = try? assistant.addSpoken(transcript) else { return }
+                showAdded(task, started: false, assistant, changed: changed)
+            }
+        case .finishListening? where !holdHandled:
+            // Held without voice, released before the timer could open the typing box.
+            openQuickAdd(assistant)
+        default:
+            break
+        }
+    }
+
+    /// The Added panel, whose Undo reverses the Operation that just added `task`.
+    private func showAdded(_ task: AssistantCore.Task, started: Bool, _ assistant: Assistant, changed: @escaping () -> Void) {
+        let entry = assistant.operationLog.last
+        changed()
+        let destination = Self.destination(task.project, in: assistant)
+        added.show(
+            started ? "Started “\(task.title)” · \(destination)" : "Added “\(task.title)” · \(destination)",
+            started: started,
+            onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(task.id, asInterruption: true) } },
+            onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry.id) } } })
     }
 
     private func openQuickAdd(_ assistant: Assistant) {

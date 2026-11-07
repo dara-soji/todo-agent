@@ -12,4 +12,8 @@ public final class FakeClock: WallClock {
     public func advance(minutes: Double) {
         now += minutes * 60
     }
+
+    public func advance(seconds: TimeInterval) {
+        now += seconds
+    }
 }
