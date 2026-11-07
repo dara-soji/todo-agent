@@ -5,6 +5,8 @@ import Foundation
 /// The helper feeds it key presses, releases and a timer's `holdCheck`; time comes from the clock.
 public struct PushToTalk {
     public static let holdThreshold: TimeInterval = 0.3
+    /// Longest recording, from the press. At the cap the press ends as if the key had been released.
+    public static let recordingCap: TimeInterval = 60
 
     public enum Action: Equatable, Sendable {
         /// Key pressed: start capturing audio, but don't show or sound anything yet.
@@ -43,7 +45,16 @@ public struct PushToTalk {
         return .startListening
     }
 
-    /// Nil for a release with no press.
+    /// Call once the cap may have passed (e.g. from a timer). At the cap the press ends with
+    /// `.finishListening`, and the real release that follows is ignored.
+    public mutating func capCheck() -> Action? {
+        guard let holdsAt, clock.now >= holdsAt - Self.holdThreshold + Self.recordingCap else { return nil }
+        self.holdsAt = nil
+        listening = false
+        return .finishListening
+    }
+
+    /// Nil for a release with no press, or the one after the cap ended its press.
     public mutating func keyUp() -> Action? {
         guard holdsAt != nil else { return nil }
         let hold = listening || isHeld

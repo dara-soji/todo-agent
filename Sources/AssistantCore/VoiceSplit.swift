@@ -67,10 +67,16 @@ public final class VoiceSplitRunner {
         self.timeout = timeout
     }
 
+    /// An empty or whitespace-only final transcript: nothing was said, so nothing is added or shown.
+    public nonisolated static func heardNothing(_ transcript: String) -> Bool {
+        transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// The Tasks added, in the order said. Silence throws `emptyTitle` and sends nothing.
     @discardableResult
     public func add(_ transcript: String) async throws -> [Task] {
-        let transcript = try Assistant.nonEmpty(transcript, else: .emptyTitle)
+        guard !Self.heardNothing(transcript) else { throw Assistant.Failure.emptyTitle }
+        let transcript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let split = await self.split(transcript)
         return try assistant.addSpoken(transcript, as: split ?? [])
     }
