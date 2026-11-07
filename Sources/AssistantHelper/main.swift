@@ -20,20 +20,11 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private let added = AddedPanel()
     private var pushToTalk = PushToTalk(clock: SystemClock())
     private let voice = VoiceCapture()
+    /// Every voice press in play: the one the key is on and earlier ones still finishing.
+    private var presses = VoicePresses()
     private var holdTimer: Timer?
     /// Ends a recording at `PushToTalk.recordingCap` as if the key had been released.
     private var capTimer: Timer?
-    /// This press's readiness: why voice couldn't start, or `.ready`.
-    private var voiceReadiness: VoiceReadiness = .ready
-    /// True while a hold is being recorded; false on a tap or when voice couldn't start.
-    private var voiceRecording = false
-    /// True while the palette shows Listening…, the only time partial transcripts are shown.
-    private var listeningShown = false
-    /// True once the hold timer has acted on this press.
-    private var holdHandled = false
-    /// Now's confident Project when ⌥Space went down: the palette's heading while listening, and
-    /// where spoken Tasks go unless a Project is named out loud.
-    private var voiceProject: Project.ID?
     /// Refreshes the menus after a quick-add.
     private var quickAddChanged: (() -> Void)?
     private var nudgePanel: NudgePanel?
@@ -213,14 +204,17 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             released: { [weak self] in self?.quickAddReleased() })
         quickAddChanged = changed
         voice.onPartial = { [weak self] text in
-            guard let self, listeningShown else { return }
+            // Partials only while this press's Listening… is up.
+            guard let self, let down = presses.down, presses.palette == down.id else { return }
             quickAdd.showTranscript(text)
         }
         quickAdd.onSubmit = { [weak self] title, start in
             guard let self else { return }
             do {
                 let task = try assistant.quickAdd(title, start: start)
-                showAdded([task], started: start, assistant, changed: changed)
+                // Read at once: nothing else can be logged in between.
+                let entry = assistant.task(task.id) == nil ? nil : assistant.operationLog.last?.id
+                showAdded([task], undoing: entry, started: start, assistant, changed: changed)
             } catch {
                 NSSound.beep()
             }
@@ -230,13 +224,11 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     /// ⌥Space down: audio starts buffering now, and a timer decides at 300 ms whether it's a hold.
     private func quickAddPressed() {
         guard pushToTalk.keyDown() == .startBuffering else { return }
-        voiceProject = assistant?.now.confidentProject
-        voiceReadiness = voice.begin()
-        voiceRecording = voiceReadiness == .ready
-        holdHandled = false
+        let project = assistant?.now.confidentProject
+        let press = presses.pressed(voice.begin(), project: project)
         holdTimer?.invalidate()
         holdTimer = Timer.scheduledTimer(withTimeInterval: PushToTalk.holdThreshold, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.quickAddHeld() }
+            MainActor.assumeIsolated { self?.quickAddHeld(press.id) }
         }
         capTimer?.invalidate()
         capTimer = Timer.scheduledTimer(withTimeInterval: PushToTalk.recordingCap, repeats: false) { [weak self] _ in
@@ -247,20 +239,21 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func quickAddHeld() {
+    private func quickAddHeld(_ id: VoicePress.ID) {
         guard pushToTalk.holdCheck() == .startListening, let assistant else { return }
-        holdHandled = true
-        guard voiceRecording else {
+        switch presses.held(id) {
+        case .showListening(let press):
+            NSSound(named: "Tink")?.play()
+            quickAdd.showListening(destination: Self.destination(press.project, in: assistant))
+            quickAdd.showTranscript(voice.transcript)
+        case .askThenType(let readiness):
             // Voice can't run: the hold still opens the typing box, saying why. The first hold
-            // shows macOS's permission prompt instead.
-            VoiceCapture.askForPermission(voiceReadiness)
-            openQuickAdd(assistant, voiceUnavailable: voiceReadiness)
-            return
+            // shows macOS's permission prompt too.
+            VoiceCapture.askForPermission(readiness)
+            openQuickAdd(assistant, voice: readiness)
+        case .ignore:
+            break
         }
-        NSSound(named: "Tink")?.play()
-        quickAdd.showListening(destination: Self.destination(voiceProject, in: assistant))
-        quickAdd.showTranscript(voice.transcript)
-        listeningShown = true
     }
 
     private func quickAddReleased() {
@@ -274,45 +267,52 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         holdTimer = nil
         capTimer?.invalidate()
         capTimer = nil
-        switch action {
-        case .openTypingBox?:
+        switch presses.ended(action) {
+        case .discardThenType:
             voice.cancel()
-            voiceRecording = false
             openQuickAdd(assistant)
-        case .finishListening? where voiceRecording:
-            voiceRecording = false
-            listeningShown = false
-            // A release can beat the timer; the Listening state then never showed.
-            let project = voiceProject
+        case .finish(let press):
+            // Finishes on its own: a new press meanwhile records alongside, and doesn't drop it.
             voice.finish { [weak self] transcript in
-                guard let self, let modelCalls else { return }
-                // Nothing heard: nothing added, no Added panel, the palette just closes.
-                guard !VoiceSplitRunner.heardNothing(transcript) else { return quickAdd.hideListening() }
-                quickAdd.showAdding()
-                _Concurrency.Task {
-                    // Haiku splits it into Tasks and matches a Project named out loud; on any
-                    // failure it is one verbatim Task. Either way, unnamed means the Project
-                    // the palette showed when recording started.
-                    let tasks = try? await modelCalls.voiceSplit.add(transcript, otherwise: project)
-                    self.quickAdd.hideListening()
-                    guard let tasks, !tasks.isEmpty else { return }
-                    self.showAdded(tasks, started: false, assistant, changed: changed)
-                }
+                self?.transcribed(press, transcript, assistant, changed: changed)
             }
-        case .finishListening? where !holdHandled:
+        case .askThenType(let readiness):
             // Held without voice, released before the timer could open the typing box.
-            VoiceCapture.askForPermission(voiceReadiness)
-            openQuickAdd(assistant, voiceUnavailable: voiceReadiness)
-        default:
+            VoiceCapture.askForPermission(readiness)
+            openQuickAdd(assistant, voice: readiness)
+        case .ignore:
             break
         }
     }
 
-    /// The Added panel, whose Undo reverses the one Operation that just added `tasks`. With several
-    /// (a split recording), Start starts the first.
-    private func showAdded(_ tasks: [AssistantCore.Task], started: Bool, _ assistant: Assistant, changed: @escaping () -> Void) {
+    /// A finished press's transcript. It touches the palette only while that press still owns it,
+    /// so an earlier press never closes a newer press's Listening….
+    private func transcribed(_ press: VoicePress, _ transcript: String, _ assistant: Assistant, changed: @escaping () -> Void) {
+        switch presses.transcribed(press.id, transcript) {
+        case .drop(let closePalette):
+            // Nothing heard: nothing added, no Added panel.
+            if closePalette { quickAdd.hideListening() }
+        case .add(let showAdding):
+            if showAdding { quickAdd.showAdding() }
+            _Concurrency.Task {
+                // Haiku splits it into Tasks and matches a Project named out loud; on any
+                // failure it is one verbatim Task. Either way, unnamed means the Project
+                // the palette showed when this press started.
+                let added = try? await self.modelCalls?.voiceSplit.add(transcript, otherwise: press.project)
+                if self.presses.added(press.id) { self.quickAdd.hideListening() }
+                guard let added, !added.tasks.isEmpty else { return }
+                self.showAdded(added.tasks, undoing: added.undoEntry, started: false, assistant, changed: changed)
+            }
+        }
+    }
+
+    /// The Added panel, whose Undo reverses `entry`: the one Operation that added `tasks`. With
+    /// several (a split recording), Start starts the first.
+    private func showAdded(
+        _ tasks: [AssistantCore.Task], undoing entry: LogEntry.ID?, started: Bool, _ assistant: Assistant,
+        changed: @escaping () -> Void
+    ) {
         guard let first = tasks.first else { return }
-        let entry = assistant.operationLog.last
         changed()
         let destination = Self.destination(first.project, in: assistant)
         let heading = started
@@ -321,13 +321,12 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
         added.show(
             heading, items: tasks.count == 1 ? [] : tasks.map(\.title), started: started,
             onStart: { Attempt.run("Couldn't start the Task", then: changed) { try assistant.commitTask(first.id, asInterruption: true) } },
-            onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry.id) } } })
+            onUndo: { Attempt.run("Couldn't undo", then: changed) { if let entry { try assistant.undo(entry) } } })
     }
 
-    /// The typing box; when voice was tried and couldn't run, with a line saying why.
-    private func openQuickAdd(_ assistant: Assistant, voiceUnavailable readiness: VoiceReadiness = .ready) {
-        let notice: VoiceUnavailable? = if case .unavailable(let cause) = readiness { cause } else { nil }
-        quickAdd.show(destination: Self.destination(assistant.now.project, in: assistant), voiceNotice: notice)
+    /// The typing box; when a hold couldn't record, with a line saying why (or that macOS is asking).
+    private func openQuickAdd(_ assistant: Assistant, voice readiness: VoiceReadiness = .ready) {
+        quickAdd.show(destination: Self.destination(assistant.now.project, in: assistant), voiceNotice: readiness.notice)
     }
 
     /// Where a quick-added Task goes, as the palette and the confirmation name it.

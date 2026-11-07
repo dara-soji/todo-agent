@@ -67,3 +67,27 @@ public enum VoiceReadiness: Equatable, Sendable {
         }
     }
 }
+
+/// The one line the typing box shows when a hold couldn't record; clicking it opens `settingsURL`.
+public struct VoiceNotice: Equatable, Sendable {
+    public let message: String
+    public let settingsURL: URL?
+
+    public init(message: String, settingsURL: URL? = nil) {
+        self.message = message
+        self.settingsURL = settingsURL
+    }
+}
+
+extension VoiceReadiness {
+    /// What the typing box says when this hold opened it instead of recording; nil when ready.
+    public var notice: VoiceNotice? {
+        switch self {
+        case .ready: nil
+        // macOS's prompt is up; this press types, the next hold records.
+        case .askForMicrophone, .askForSpeechRecognition:
+            VoiceNotice(message: "macOS is asking for access · the next hold will record")
+        case .unavailable(let cause): VoiceNotice(message: cause.message, settingsURL: cause.settingsURL)
+        }
+    }
+}

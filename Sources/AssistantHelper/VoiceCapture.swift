@@ -6,24 +6,27 @@ import AssistantCore
 /// Push-to-talk speech-to-text: microphone audio into Apple's on-device recognizer in the system
 /// locale. Audio goes from the tap straight to the recognizer in memory; it is never written to disk
 /// and never sent to a cloud speech service.
+///
+/// Each press gets its own `Recording`. Only the live one has the microphone; a released one keeps
+/// waiting for its final result while a new press records, so an earlier recording is never dropped.
 @MainActor
 final class VoiceCapture {
     private let engine = AVAudioEngine()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var recognition: SFSpeechRecognitionTask?
-    /// What has been heard so far this press.
-    private(set) var transcript = ""
-    private var finished: ((String) -> Void)?
-    private var finishTimeout: Timer?
-    /// Tells this press's results from late ones of a press already cancelled.
-    private var session = 0
-    /// Called on the main thread with the transcript so far.
+    /// The recording that has the microphone, from `begin()` until `finish` or `cancel`.
+    private var live: Recording?
+    /// Released recordings still waiting for their final result, kept alive until they deliver.
+    private var finishing: [Recording] = []
+    /// Called on the main thread with the live recording's transcript so far.
     var onPartial: (String) -> Void = { _ in }
+
+    /// What has been heard so far by the live recording.
+    var transcript: String { live?.state.text ?? "" }
 
     /// Starts capturing at once, so the first word survives the wait to tell a tap from a hold.
     /// Otherwise names why voice can't run; the caller falls back to the typing box.
     /// Nothing is asked for here, since a tap shouldn't prompt: see `askForPermission()`.
     func begin() -> VoiceReadiness {
+        // A press always ends in `finish` or `cancel`; this is only a safety net.
         cancel()
         let recognizer = SFSpeechRecognizer(locale: .current)
         let readiness = VoiceReadiness(
@@ -48,46 +51,58 @@ final class VoiceCapture {
             input.removeTap(onBus: 0)
             return .unavailable(.noMicrophone)
         }
-        self.request = request
-        transcript = ""
-        session += 1
-        recognition = recognizer.recognitionTask(with: request, resultHandler: Self.delivering(to: self, session: session))
+        let recording = Recording(recognizer: recognizer, request: request)
+        recording.capture = self
+        live = recording
+        recording.task = recognizer.recognitionTask(with: request, resultHandler: Self.delivering(to: recording))
         return .ready
     }
 
     /// Shows macOS's prompts for the permissions `begin()` found undecided, microphone then speech
     /// recognition. Called on a hold, so the first hold asks; that press types, the next one records.
-    static func askForPermission(_ readiness: VoiceReadiness) {
+    /// Nonisolated: macOS calls back on its own queue, so no callback may inherit main-actor isolation.
+    nonisolated static func askForPermission(_ readiness: VoiceReadiness) {
         switch readiness {
         case .askForMicrophone:
             AVCaptureDevice.requestAccess(for: .audio) { granted in
-                if granted, SFSpeechRecognizer.authorizationStatus() == .notDetermined {
-                    SFSpeechRecognizer.requestAuthorization { _ in }
+                guard granted else { return }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { askForSpeechRecognitionIfUndecided() }
                 }
             }
-        case .askForSpeechRecognition: SFSpeechRecognizer.requestAuthorization { _ in }
+        case .askForSpeechRecognition: askForSpeechRecognitionIfUndecided()
         default: break
         }
     }
 
-    /// Stops listening and hands over the final transcript ("" if nothing was heard).
-    func finish(_ completion: @escaping (String) -> Void) {
-        guard request != nil else { return completion("") }
-        stopAudio()
-        request?.endAudio()
-        finished = completion
-        // The final result normally follows within a moment; don't wait on it forever.
-        finishTimeout = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.deliver() }
-        }
+    private nonisolated static func askForSpeechRecognitionIfUndecided() {
+        guard SFSpeechRecognizer.authorizationStatus() == .notDetermined else { return }
+        SFSpeechRecognizer.requestAuthorization { _ in }
     }
 
-    /// Drops whatever was captured, e.g. on a tap.
+    /// Stops listening and hands over the live recording's transcript ("" if nothing was heard).
+    /// It finishes on its own: a new `begin()` doesn't drop it.
+    func finish(_ completion: @escaping (String) -> Void) {
+        guard let recording = live else { return completion("") }
+        live = nil
+        recording.completion = completion
+        finishing.append(recording)
+        recording.apply(recording.state.finish().map { [$0] } ?? [.deliver(recording.state.text)])
+    }
+
+    /// Drops whatever the live recording captured, e.g. on a tap.
     func cancel() {
+        guard let recording = live else { return }
+        live = nil
         stopAudio()
-        recognition?.cancel()
-        finished = nil
-        reset()
+        recording.state.cancel()
+        recording.end()
+    }
+
+    fileprivate func stopAudio(for recording: Recording) {
+        // A finishing recording has already given up the mic, perhaps to a newer press.
+        guard live === recording || live == nil else { return }
+        stopAudio()
     }
 
     private func stopAudio() {
@@ -96,29 +111,68 @@ final class VoiceCapture {
         engine.inputNode.removeTap(onBus: 0)
     }
 
-    private func received(_ text: String?, isFinal: Bool, session: Int) {
-        guard request != nil, session == self.session else { return }
-        if let text {
-            transcript = text
-            if finished == nil { onPartial(text) }
+    fileprivate func ended(_ recording: Recording) {
+        finishing.removeAll { $0 === recording }
+        if live === recording { live = nil }
+    }
+
+    /// One press's recognition. Holds its recognizer for as long as its task runs.
+    @MainActor
+    fileprivate final class Recording {
+        private var recognizer: SFSpeechRecognizer?
+        private var request: SFSpeechAudioBufferRecognitionRequest?
+        var task: SFSpeechRecognitionTask?
+        var state = VoiceTranscript()
+        var completion: ((String) -> Void)?
+        weak var capture: VoiceCapture?
+        private var timeout: Timer?
+
+        init(recognizer: SFSpeechRecognizer, request: SFSpeechAudioBufferRecognitionRequest) {
+            self.recognizer = recognizer
+            self.request = request
         }
-        if isFinal { deliver() }
-    }
 
-    private func deliver() {
-        let completion = finished
-        let text = transcript
-        recognition?.cancel()
-        reset()
-        completion?(text)
-    }
+        func received(_ text: String?, isFinal: Bool) {
+            apply(state.received(text, isFinal: isFinal))
+        }
 
-    private func reset() {
-        finishTimeout?.invalidate()
-        finishTimeout = nil
-        request = nil
-        recognition = nil
-        finished = nil
+        func apply(_ effects: [VoiceTranscript.Effect]) {
+            for effect in effects {
+                switch effect {
+                case .showPartial(let text):
+                    if capture?.live === self { capture?.onPartial(text) }
+                case .stopAudio:
+                    capture?.stopAudio(for: self)
+                    request?.endAudio()
+                    if completion != nil { startTimeout() }
+                case .deliver(let text):
+                    let completion = self.completion
+                    end()
+                    completion?(text)
+                }
+            }
+        }
+
+        /// The final result normally follows within a moment; don't wait on it forever.
+        private func startTimeout() {
+            timeout = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let effect = self.state.timedOut() else { return }
+                    self.apply([effect])
+                }
+            }
+        }
+
+        func end() {
+            timeout?.invalidate()
+            timeout = nil
+            task?.cancel()
+            task = nil
+            request = nil
+            recognizer = nil
+            completion = nil
+            capture?.ended(self)
+        }
     }
 
     // Built outside the main actor: the tap runs on the audio thread and results arrive on a
@@ -129,12 +183,12 @@ final class VoiceCapture {
         return { buffer, _ in request.append(buffer) }
     }
 
-    private nonisolated static func delivering(to capture: VoiceCapture, session: Int) -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
-        { [weak capture] result, error in
+    private nonisolated static func delivering(to recording: Recording) -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
+        { [weak recording] result, error in
             let text = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? (error != nil)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { capture?.received(text, isFinal: isFinal, session: session) }
+                MainActor.assumeIsolated { recording?.received(text, isFinal: isFinal) }
             }
         }
     }
