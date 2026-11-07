@@ -1,4 +1,5 @@
 import AppKit
+import AssistantCore
 
 /// The ⌥Space palette: type a Task, ↩ to add it to Now's Project, ⌘↩ to add and start it, esc to close.
 /// While ⌥Space is held it shows "Listening…" and the live transcript instead.
@@ -25,6 +26,9 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     private let field = NSTextField()
     private static let typingHint = "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE"
     private let hint = NSTextField(labelWithString: typingHint)
+    /// "Voice needs … → Open Settings", shown in the typing box when a hold couldn't record.
+    private let notice = NSButton(title: "", target: nil, action: nil)
+    private var noticeURL: URL?
     /// True from Listening… until the recording's Tasks are added (or the typing box opens).
     private(set) var isListening = false
     /// Called with the title and whether to start it.
@@ -46,7 +50,13 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         hint.font = Theme.mono(9)
         hint.textColor = Theme.steel
 
-        let stack = NSStackView(views: [heading, field, hint])
+        notice.isBordered = false
+        notice.alignment = .left
+        notice.target = self
+        notice.action = #selector(openNoticeSettings)
+        notice.isHidden = true
+
+        let stack = NSStackView(views: [heading, field, hint, notice])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 6
@@ -64,8 +74,10 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     }
 
     /// `destination` names where ↩ will put the Task, e.g. "TODO-AGENT" or "NO PROJECT".
-    func show(destination: String) {
+    /// `voiceNotice`: why the hold that opened it couldn't record, as one clickable line.
+    func show(destination: String, voiceNotice: VoiceUnavailable? = nil) {
         isListening = false
+        showNotice(voiceNotice)
         heading.attributedStringValue = Theme.label("Add task → \(destination)", color: Theme.accent)
         field.stringValue = ""
         field.isEditable = true
@@ -90,6 +102,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         field.lineBreakMode = .byTruncatingHead
         hint.stringValue = "RELEASE ⌥SPACE TO ADD"
         isListening = true
+        showNotice(nil)
         position()
         previousApp = nil
         panel.orderFrontRegardless()
@@ -112,6 +125,22 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         isListening = false
         panel.orderOut(nil)
         restorePlaceholder()
+    }
+
+    private func showNotice(_ cause: VoiceUnavailable?) {
+        notice.isHidden = cause == nil
+        noticeURL = cause?.settingsURL
+        notice.attributedTitle = NSAttributedString(
+            string: cause?.message ?? "",
+            attributes: [.foregroundColor: noticeURL == nil ? Theme.steel : Theme.accent, .font: Theme.mono(9)])
+        notice.isEnabled = noticeURL != nil
+        panel.setContentSize(NSSize(width: panel.frame.width, height: cause == nil ? 92 : 112))
+    }
+
+    @objc private func openNoticeSettings() {
+        guard let noticeURL else { return }
+        close()
+        NSWorkspace.shared.open(noticeURL)
     }
 
     private func restorePlaceholder() {

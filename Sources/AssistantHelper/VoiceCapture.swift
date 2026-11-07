@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Speech
+import AssistantCore
 
 /// Push-to-talk speech-to-text: microphone audio into Apple's on-device recognizer in the system
 /// locale. Audio goes from the tap straight to the recognizer in memory; it is never written to disk
@@ -20,32 +21,53 @@ final class VoiceCapture {
     var onPartial: (String) -> Void = { _ in }
 
     /// Starts capturing at once, so the first word survives the wait to tell a tap from a hold.
-    /// False when voice can't run (no permission yet, or no on-device recognizer for the locale);
-    /// the caller falls back to the typing box.
-    func begin() -> Bool {
+    /// Otherwise names why voice can't run; the caller falls back to the typing box.
+    /// Nothing is asked for here, since a tap shouldn't prompt: see `askForPermission()`.
+    func begin() -> VoiceReadiness {
         cancel()
-        guard Self.isPermitted, let recognizer = SFSpeechRecognizer(locale: .current),
-              recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else { return false }
+        let recognizer = SFSpeechRecognizer(locale: .current)
+        let readiness = VoiceReadiness(
+            microphone: Self.permission(AVCaptureDevice.authorizationStatus(for: .audio)),
+            speechRecognition: Self.permission(SFSpeechRecognizer.authorizationStatus()),
+            canAsk: Self.canAsk,
+            onDeviceRecognition: recognizer.map { $0.isAvailable && $0.supportsOnDeviceRecognition } ?? false,
+            locale: Locale.current.identifier)
+        guard readiness == .ready, let recognizer else { return readiness }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
         request.shouldReportPartialResults = true
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0 else { return false }  // no microphone
+        guard format.channelCount > 0 else { return .unavailable(.noMicrophone) }
         input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.feeding(request))
         engine.prepare()
         do {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            return false
+            return .unavailable(.noMicrophone)
         }
         self.request = request
         transcript = ""
         session += 1
         recognition = recognizer.recognitionTask(with: request, resultHandler: Self.delivering(to: self, session: session))
-        return true
+        return .ready
+    }
+
+    /// Shows macOS's prompts for the permissions `begin()` found undecided, microphone then speech
+    /// recognition. Called on a hold, so the first hold asks; that press types, the next one records.
+    static func askForPermission(_ readiness: VoiceReadiness) {
+        switch readiness {
+        case .askForMicrophone:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                if granted, SFSpeechRecognizer.authorizationStatus() == .notDetermined {
+                    SFSpeechRecognizer.requestAuthorization { _ in }
+                }
+            }
+        case .askForSpeechRecognition: SFSpeechRecognizer.requestAuthorization { _ in }
+        default: break
+        }
     }
 
     /// Stops listening and hands over the final transcript ("" if nothing was heard).
@@ -117,22 +139,27 @@ final class VoiceCapture {
         }
     }
 
-    /// Both permissions granted. Undecided ones are asked for here (only from the bundled app,
-    /// whose Info.plist explains why), and this press falls back to typing.
-    private static var isPermitted: Bool {
-        let microphone = AVCaptureDevice.authorizationStatus(for: .audio)
-        let speech = SFSpeechRecognizer.authorizationStatus()
-        if microphone == .authorized && speech == .authorized { return true }
-        // Without the usage descriptions macOS would kill the process for asking.
+    /// Without the usage descriptions (e.g. `swift run`) macOS would kill the process for asking.
+    private static var canAsk: Bool {
         let info = Bundle.main.infoDictionary ?? [:]
-        guard info["NSMicrophoneUsageDescription"] != nil, info["NSSpeechRecognitionUsageDescription"] != nil else {
-            return false
+        return info["NSMicrophoneUsageDescription"] != nil && info["NSSpeechRecognitionUsageDescription"] != nil
+    }
+
+    private static func permission(_ status: AVAuthorizationStatus) -> VoicePermission {
+        switch status {
+        case .authorized: .authorized
+        case .notDetermined: .notDetermined
+        case .restricted: .restricted
+        default: .denied
         }
-        if microphone == .notDetermined {
-            AVCaptureDevice.requestAccess(for: .audio) { _ in }
-        } else if speech == .notDetermined {
-            SFSpeechRecognizer.requestAuthorization { _ in }
+    }
+
+    private static func permission(_ status: SFSpeechRecognizerAuthorizationStatus) -> VoicePermission {
+        switch status {
+        case .authorized: .authorized
+        case .notDetermined: .notDetermined
+        case .restricted: .restricted
+        default: .denied
         }
-        return false
     }
 }
