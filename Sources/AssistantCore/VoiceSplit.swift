@@ -40,6 +40,23 @@ public struct SpokenTask: Equatable, Sendable {
     }
 }
 
+/// What one recording added: its Tasks, as one Operation.
+public struct SpokenAdd: Equatable, Sendable {
+    public let tasks: [Task]
+    public let outcome: Outcome
+
+    public init(tasks: [Task], outcome: Outcome) {
+        self.tasks = tasks
+        self.outcome = outcome
+    }
+
+    /// The Operation log entry the add wrote, which the Added panel's Undo reverses. Nil while
+    /// the Guardrail holds it as an Ask: nothing has been added yet.
+    public var undoEntry: LogEntry.ID? {
+        if case .ran(let entry) = outcome { entry } else { nil }
+    }
+}
+
 /// Port: turns a transcript into Task titles. Throws for anything that isn't an answer.
 @MainActor
 public protocol TranscriptSplitter: AnyObject, Sendable {
@@ -101,11 +118,11 @@ public final class VoiceSplitRunner {
         transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// The Tasks added, in the order said. They go to the Project named out loud, or else to
+    /// The Tasks added, in the order said, and the log entry that added them. They go to the Project named out loud, or else to
     /// `project`: the one the palette showed when recording started. Silence throws `emptyTitle`
     /// and sends nothing.
     @discardableResult
-    public func add(_ transcript: String, otherwise project: Project.ID?) async throws -> [Task] {
+    public func add(_ transcript: String, otherwise project: Project.ID?) async throws -> SpokenAdd {
         guard !Self.heardNothing(transcript) else { throw Assistant.Failure.emptyTitle }
         let transcript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         let split = await self.split(transcript)

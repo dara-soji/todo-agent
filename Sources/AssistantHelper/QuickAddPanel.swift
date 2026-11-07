@@ -26,7 +26,7 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     private let field = NSTextField()
     private static let typingHint = "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE"
     private let hint = NSTextField(labelWithString: typingHint)
-    /// "Voice needs … → Open Settings", shown in the typing box when a hold couldn't record.
+    /// "Voice needs … → Open Settings" (or that macOS is asking), shown in the typing box when a hold couldn't record.
     private let notice = NSButton(title: "", target: nil, action: nil)
     private var noticeURL: URL?
     /// True from Listening… until the recording's Tasks are added (or the typing box opens).
@@ -74,8 +74,8 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
     }
 
     /// `destination` names where ↩ will put the Task, e.g. "TODO-AGENT" or "NO PROJECT".
-    /// `voiceNotice`: why the hold that opened it couldn't record, as one clickable line.
-    func show(destination: String, voiceNotice: VoiceUnavailable? = nil) {
+    /// `voiceNotice`: why the hold that opened it couldn't record, as one line (clickable when it names a pane).
+    func show(destination: String, voiceNotice: VoiceNotice? = nil) {
         isListening = false
         showNotice(voiceNotice)
         heading.attributedStringValue = Theme.label("Add task → \(destination)", color: Theme.accent)
@@ -127,14 +127,14 @@ final class QuickAddPanel: NSObject, NSTextFieldDelegate {
         restorePlaceholder()
     }
 
-    private func showNotice(_ cause: VoiceUnavailable?) {
-        notice.isHidden = cause == nil
-        noticeURL = cause?.settingsURL
+    private func showNotice(_ voiceNotice: VoiceNotice?) {
+        notice.isHidden = voiceNotice == nil
+        noticeURL = voiceNotice?.settingsURL
         notice.attributedTitle = NSAttributedString(
-            string: cause?.message ?? "",
+            string: voiceNotice?.message ?? "",
             attributes: [.foregroundColor: noticeURL == nil ? Theme.steel : Theme.accent, .font: Theme.mono(9)])
         notice.isEnabled = noticeURL != nil
-        panel.setContentSize(NSSize(width: panel.frame.width, height: cause == nil ? 92 : 112))
+        panel.setContentSize(NSSize(width: panel.frame.width, height: voiceNotice == nil ? 92 : 112))
     }
 
     @objc private func openNoticeSettings() {

@@ -65,3 +65,23 @@ import AssistantCore
         #expect(!VoiceSplitRunner.heardNothing(" email Sam "))
     }
 }
+
+@Suite struct VoiceNoticeTests {
+    @Test func anUndecidedHoldSaysMacOSIsAskingAndTheNextHoldRecords() throws {
+        for readiness in [VoiceReadiness.askForMicrophone, .askForSpeechRecognition] {
+            let notice = try #require(readiness.notice)
+            #expect(notice.message == "macOS is asking for access · the next hold will record")
+            #expect(notice.settingsURL == nil)
+        }
+    }
+
+    @Test func anUnavailableHoldSaysWhyAndLinksToSettings() {
+        let notice = VoiceReadiness.unavailable(.microphoneDenied).notice
+        #expect(notice == VoiceNotice(message: VoiceUnavailable.microphoneDenied.message,
+                                      settingsURL: VoiceUnavailable.microphoneDenied.settingsURL))
+    }
+
+    @Test func aReadyHoldHasNoNotice() {
+        #expect(VoiceReadiness.ready.notice == nil)
+    }
+}

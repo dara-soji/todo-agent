@@ -41,7 +41,7 @@ extension Assistant {
     /// the palette showed when recording started). With no `tasks` (no split), the transcript as
     /// heard is the one Task. The Operation log keeps the transcript.
     @discardableResult
-    public func addSpoken(_ transcript: String, as tasks: [SpokenTask] = [], otherwise fallback: Project.ID?) throws -> [Task] {
+    public func addSpoken(_ transcript: String, as tasks: [SpokenTask] = [], otherwise fallback: Project.ID?) throws -> SpokenAdd {
         let transcript = try Self.nonEmpty(transcript, else: .emptyTitle)
         let drafts = tasks.isEmpty ? [SpokenTask(title: transcript)] : tasks
         let added = try drafts.map { spoken in
@@ -53,8 +53,8 @@ extension Assistant {
             ? "Added by voice “\(transcript)”"
             : "Added \(added.count) \(added.count == 1 ? "Task" : "Tasks") by voice “\(transcript)”: "
                 + added.map { "“\($0.title)”" }.joined(separator: ", ")
-        try perform(.addTask, summary, by: .dara, writing: Change(tasks: added))
-        return added
+        let outcome = try perform(.addTask, summary, by: .dara, writing: Change(tasks: added))
+        return SpokenAdd(tasks: added, outcome: outcome)
     }
 
     @discardableResult
