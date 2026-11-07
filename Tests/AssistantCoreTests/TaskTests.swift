@@ -47,11 +47,11 @@ import AssistantTestSupport
 
     // MARK: Voice quick-add
 
-    @Test func aSpokenTaskIsTheVerbatimTranscriptInNowsProject() throws {
+    @Test func aSpokenTaskIsTheVerbatimTranscriptInTheProjectGiven() throws {
         let assistant = makeAssistant()
         let todo = try onTodoAgent(assistant)
 
-        let task = try #require(try assistant.addSpoken("  um I need to email Sam about the deck ").first)
+        let task = try #require(try assistant.addSpoken("  um I need to email Sam about the deck ", otherwise: todo.id).first)
 
         #expect(task.title == "um I need to email Sam about the deck")
         #expect(task.source == .byHand)
@@ -61,7 +61,7 @@ import AssistantTestSupport
 
     @Test func theTranscriptIsInTheOperationLog() throws {
         let assistant = makeAssistant()
-        _ = try assistant.addSpoken("Email Sam about the deck")
+        _ = try assistant.addSpoken("Email Sam about the deck", otherwise: nil)
 
         let entry = try #require(assistant.operationLog.last)
         #expect(entry.kind == .addTask)
@@ -71,7 +71,7 @@ import AssistantTestSupport
 
     @Test func aSpokenTaskCanBeUndone() throws {
         let assistant = makeAssistant()
-        let task = try #require(try assistant.addSpoken("Email Sam").first)
+        let task = try #require(try assistant.addSpoken("Email Sam", otherwise: nil).first)
 
         try assistant.undo(try #require(assistant.operationLog.last).id)
 
@@ -81,7 +81,7 @@ import AssistantTestSupport
 
     @Test func silenceAddsNothing() {
         let assistant = makeAssistant()
-        #expect(throws: Assistant.Failure.emptyTitle) { try assistant.addSpoken(" \n ") }
+        #expect(throws: Assistant.Failure.emptyTitle) { try assistant.addSpoken(" \n ", otherwise: nil) }
         #expect(assistant.operationLog.isEmpty)
     }
 

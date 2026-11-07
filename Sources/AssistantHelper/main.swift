@@ -31,6 +31,9 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     private var listeningShown = false
     /// True once the hold timer has acted on this press.
     private var holdHandled = false
+    /// Now's confident Project when ⌥Space went down: the palette's heading while listening, and
+    /// where spoken Tasks go unless a Project is named out loud.
+    private var voiceProject: Project.ID?
     /// Refreshes the menus after a quick-add.
     private var quickAddChanged: (() -> Void)?
     private var nudgePanel: NudgePanel?
@@ -227,6 +230,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
     /// ⌥Space down: audio starts buffering now, and a timer decides at 300 ms whether it's a hold.
     private func quickAddPressed() {
         guard pushToTalk.keyDown() == .startBuffering else { return }
+        voiceProject = assistant?.now.confidentProject
         voiceReadiness = voice.begin()
         voiceRecording = voiceReadiness == .ready
         holdHandled = false
@@ -254,7 +258,7 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSSound(named: "Tink")?.play()
-        quickAdd.showListening(destination: Self.destination(assistant.now.project, in: assistant))
+        quickAdd.showListening(destination: Self.destination(voiceProject, in: assistant))
         quickAdd.showTranscript(voice.transcript)
         listeningShown = true
     }
@@ -279,14 +283,17 @@ final class HelperDelegate: NSObject, NSApplicationDelegate {
             voiceRecording = false
             listeningShown = false
             // A release can beat the timer; the Listening state then never showed.
+            let project = voiceProject
             voice.finish { [weak self] transcript in
                 guard let self, let modelCalls else { return }
                 // Nothing heard: nothing added, no Added panel, the palette just closes.
                 guard !VoiceSplitRunner.heardNothing(transcript) else { return quickAdd.hideListening() }
                 quickAdd.showAdding()
                 _Concurrency.Task {
-                    // Haiku splits it into Tasks, or on any failure it is one verbatim Task.
-                    let tasks = try? await modelCalls.voiceSplit.add(transcript)
+                    // Haiku splits it into Tasks and matches a Project named out loud; on any
+                    // failure it is one verbatim Task. Either way, unnamed means the Project
+                    // the palette showed when recording started.
+                    let tasks = try? await modelCalls.voiceSplit.add(transcript, otherwise: project)
                     self.quickAdd.hideListening()
                     guard let tasks, !tasks.isEmpty else { return }
                     self.showAdded(tasks, started: false, assistant, changed: changed)
