@@ -2,11 +2,14 @@ import AssistantCore
 import Foundation
 
 /// Runs the core's model-backed work after each Signal (screenshot guesses and Next tie-breaks)
-/// with the real adapters, one at a time. Without an API key nothing is asked, so rules alone run.
+/// with the real adapters, one at a time, and holds voice quick-add's split. Without an API key nothing is asked, so rules alone run.
 @MainActor
 final class ModelCalls {
     private let guesses: GuessRunner
     private let tieBreaks: TieBreakRunner
+    /// Voice quick-add's split. Without an API key the client fails at once and the verbatim
+    /// transcript is added.
+    let voiceSplit: VoiceSplitRunner
     private var running = false
     var onChange: () -> Void = {}
 
@@ -15,6 +18,7 @@ final class ModelCalls {
         guesses = GuessRunner(
             assistant: assistant, capturer: WindowCapture(excludesApp: { assistant.excludesApp($0) }), model: client)
         tieBreaks = TieBreakRunner(assistant: assistant, tieBreaker: client)
+        voiceSplit = VoiceSplitRunner(assistant: assistant, splitter: client)
     }
 
     func check() {
