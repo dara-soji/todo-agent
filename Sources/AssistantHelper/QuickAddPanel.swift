@@ -1,6 +1,5 @@
 import AppKit
 import AssistantCore
-import QuartzCore
 
 /// The ⌥Space palette: type a Task, ↩ to add it to Now's Project, ⌘↩ to add and start it, esc to close.
 /// While ⌥Space is held it shows "Listening…" and the live transcript instead.
@@ -23,15 +22,17 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
     }
 
     /// Each new line eases the box down over this long.
-    private static let growth: TimeInterval = 0.2
+    private static let growDuration: TimeInterval = 0.2
     /// How much of the box's top fades when earlier lines have scrolled out.
     private static let fade: CGFloat = 0.22
     private static let insets = NSEdgeInsets(top: 14, left: 18, bottom: 12, right: 18)
     private static let width: CGFloat = 520
+    /// The one-line box's height, which also sets where its top edge sits on screen.
+    private static let openHeight: CGFloat = 92
     /// The text's width: fixed, so wrapping is measured right even before the panel first lays out.
     private static let textWidth = width - insets.left - insets.right
 
-    private let panel = NSPanel.themed(KeyablePanel.self, size: NSSize(width: QuickAddPanel.width, height: 92))
+    private let panel = NSPanel.themed(KeyablePanel.self, size: NSSize(width: QuickAddPanel.width, height: QuickAddPanel.openHeight))
     /// The app Dara was in, given focus back when the palette closes.
     private var previousApp: NSRunningApplication?
     private let heading = NSTextField(labelWithString: "")
@@ -39,7 +40,9 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
     private let text = NSTextView()
     /// NSTextView has no placeholder of its own: "What needs doing?" or "Listening…", shown while empty.
     private let placeholder = NSTextField(labelWithString: "")
-    private var boxHeight: NSLayoutConstraint!
+    private let boxHeight: NSLayoutConstraint
+    /// The height the box is growing to; read instead of the constraint, which lags mid-animation.
+    private var targetBox: CGFloat = 0
     private let stack: NSStackView
     private static let typingHint = "↩ ADD   ⌘↩ ADD AND START   ESC CLOSE"
     private let hint = NSTextField(labelWithString: typingHint)
@@ -58,6 +61,7 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
 
     override init() {
         stack = NSStackView(views: [heading, scroll, hint, notice])
+        boxHeight = scroll.heightAnchor.constraint(equalToConstant: 22)
         super.init()
         panel.onCommandReturn = { [weak self] in self?.submit(start: true) }
 
@@ -73,10 +77,13 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
         text.isAutomaticQuoteSubstitutionEnabled = false
         text.textContainerInset = .zero
         text.textContainer?.lineFragmentPadding = 0
-        text.textContainer?.widthTracksTextView = true
+        // The wrap width is fixed in `resize`, so the container doesn't also track the view.
+        text.textContainer?.widthTracksTextView = false
+        text.frame = NSRect(x: 0, y: 0, width: Self.textWidth, height: 22)
+        text.minSize = NSSize(width: Self.textWidth, height: 0)
+        text.maxSize = NSSize(width: Self.textWidth, height: .greatestFiniteMagnitude)
         text.isHorizontallyResizable = false
         text.isVerticallyResizable = true
-        text.autoresizingMask = .width
         text.delegate = self
 
         scroll.documentView = text
@@ -86,7 +93,7 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
         scroll.borderType = .noBorder
         scroll.wantsLayer = true
         fadeMask.colors = [NSColor.clear.cgColor, NSColor.black.cgColor, NSColor.black.cgColor]
-        // The scroll view's layer is flipped (y runs top-down), so y 0 is the top edge: clear there.
+        // Checked by eye: with these points the clear end lands on the top edge.
         fadeMask.startPoint = CGPoint(x: 0.5, y: 0)
         fadeMask.endPoint = CGPoint(x: 0.5, y: 1)
         fadeMask.locations = [0, NSNumber(value: Double(Self.fade)), 1]
@@ -110,7 +117,6 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
         stack.edgeInsets = Self.insets
         stack.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView?.addSubview(stack)
-        boxHeight = scroll.heightAnchor.constraint(equalToConstant: lineHeight)
         if let content = panel.contentView {
             NSLayoutConstraint.activate([
                 stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -207,13 +213,14 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
         container.containerSize = NSSize(width: Self.textWidth, height: .greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         let lineHeight = self.lineHeight
-        let growth = BoxGrowth(textHeight: layout.usedRect(for: container).height, lineHeight: lineHeight)
-        let box = CGFloat(growth.height(lineHeight: lineHeight))
+        let fit = BoxGrowth(textHeight: layout.usedRect(for: container).height, lineHeight: lineHeight)
+        let box = CGFloat(fit.height(lineHeight: lineHeight))
         let chrome = Self.insets.top + Self.insets.bottom + stack.views.filter { !$0.isHidden && $0 !== scroll }
             .reduce(0) { $0 + $1.fittingSize.height + stack.spacing }
         let size = NSSize(width: Self.width, height: (chrome + box).rounded(.up))
-        setFade(growth.overflows, height: box)
-        guard box != boxHeight.constant || size.height != panel.frame.height else { return }
+        setFade(fit.overflows, height: box)
+        guard box != targetBox || size.height != panel.frame.height else { return }
+        targetBox = box
 
         var frame = panel.frame
         frame.origin.y = frame.maxY - size.height
@@ -224,7 +231,7 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
             return
         }
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.growth
+            context.duration = Self.growDuration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             context.allowsImplicitAnimation = true
             boxHeight.animator().constant = box
@@ -271,7 +278,7 @@ final class QuickAddPanel: NSObject, NSTextViewDelegate {
     /// The top edge sits a fixed distance down the screen, so growing only ever extends downward.
     private func position() {
         if let screen = NSScreen.main?.visibleFrame {
-            let top = screen.maxY - screen.height / 3 + 92
+            let top = screen.maxY - screen.height / 3 + Self.openHeight
             panel.setFrameOrigin(NSPoint(x: screen.midX - panel.frame.width / 2, y: top - panel.frame.height))
         }
     }

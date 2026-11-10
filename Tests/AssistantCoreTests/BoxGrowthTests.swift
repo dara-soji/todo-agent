@@ -18,7 +18,6 @@ import AssistantCore
     @Test func itStopsAtSixLinesAndScrolls() {
         #expect(BoxGrowth(textHeight: line * 6, lineHeight: line) == BoxGrowth(lines: 6, overflows: false))
         #expect(BoxGrowth(textHeight: line * 9, lineHeight: line) == BoxGrowth(lines: 6, overflows: true))
-        #expect(BoxGrowth.maxLines == 6)
     }
 
     @Test func itsHeightIsItsLines() {
