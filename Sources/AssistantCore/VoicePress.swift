@@ -121,16 +121,25 @@ public struct VoicePresses: Sendable {
 }
 
 /// One recording's transcript as the recognizer reports it. The words heard so far are kept
-/// whatever ends recognition: if it finalises or fails while the key is still held, the mic stops
-/// at once and those words are what the release adds.
+/// whatever happens while the key is held:
+/// - after a pause, on-device recognition starts a new utterance and reports only the words since
+///   the pause, so each finished utterance is kept and the new one is added after it;
+/// - if recognition finalises or fails mid-hold, it is restarted on the same microphone (up to
+///   `restartLimit` times, then the mic stops), and the words so far are what the release adds.
 public struct VoiceTranscript: Sendable {
     public enum Effect: Equatable, Sendable {
         case showPartial(String)
+        /// Recognition ended while the key is held: start a new recognition on the same microphone.
+        case restartRecognition
         /// Stop the microphone and audio tap.
         case stopAudio
         /// The recording is over: this is what was heard ("" for nothing). Comes at most once.
         case deliver(String)
     }
+
+    /// How many times one press restarts recognition before giving up and stopping the mic, so a
+    /// recognizer that keeps failing can't spin.
+    public static let restartLimit = 10
 
     private enum Phase {
         /// Key held, mic on.
@@ -143,22 +152,38 @@ public struct VoiceTranscript: Sendable {
         case over
     }
 
-    public private(set) var text = ""
+    /// Everything heard: the finished utterances, then the one in progress.
+    public var text: String { (settled + [current]).filter { !$0.isEmpty }.joined(separator: " ") }
+    /// Utterances that ended, by a pause or a restart, in order.
+    private var settled: [String] = []
+    /// The utterance the recognizer is still reporting on.
+    private var current = ""
+    private var restarts = 0
     private var phase = Phase.recording
 
     public init() {}
 
-    public mutating func received(_ text: String?, isFinal: Bool) -> [Effect] {
+    /// `endsUtterance` is the recognizer marking this result as the end of an utterance (it
+    /// attaches metadata), after which a new one starts.
+    public mutating func received(_ text: String?, isFinal: Bool, endsUtterance: Bool = false) -> [Effect] {
         var effects: [Effect] = []
         if let text, !text.isEmpty, phase == .recording || phase == .finishing {
-            self.text = text
-            if phase == .recording { effects.append(.showPartial(text)) }
+            take(text)
+            if phase == .recording { effects.append(.showPartial(self.text)) }
+            if endsUtterance { settle() }
         }
         guard isFinal else { return effects }
         switch phase {
         case .recording:
-            phase = .ended
-            effects.append(.stopAudio)
+            // The next recognition reports from scratch: keep what this one heard.
+            settle()
+            guard restarts < Self.restartLimit else {
+                phase = .ended
+                effects.append(.stopAudio)
+                return effects
+            }
+            restarts += 1
+            effects.append(.restartRecognition)
         case .finishing:
             phase = .over
             effects.append(.deliver(self.text))
@@ -192,5 +217,34 @@ public struct VoiceTranscript: Sendable {
 
     public mutating func cancel() {
         phase = .over
+    }
+
+    /// One result's text. A result that repeats the finished utterances (the recognizer reporting
+    /// everything again) only updates the one in progress. One that starts with a different word
+    /// and is shorter is a new utterance after a pause, so the one in progress is kept. Anything
+    /// else is the recognizer revising the utterance in progress.
+    private mutating func take(_ text: String) {
+        let words = Self.words(text)
+        let before = settled.flatMap(Self.words)
+        if !before.isEmpty, words.count > before.count, Array(words.prefix(before.count)) == before {
+            current = text.split(separator: " ").dropFirst(before.count).joined(separator: " ")
+            return
+        }
+        let inProgress = Self.words(current)
+        if let first = words.first, let was = inProgress.first, first != was, words.count < inProgress.count {
+            settle()
+        }
+        current = text
+    }
+
+    private mutating func settle() {
+        guard !current.isEmpty else { return }
+        settled.append(current)
+        current = ""
+    }
+
+    /// Words compared without case or punctuation, so "Email," and "email" match.
+    private static func words(_ text: String) -> [String] {
+        text.split(separator: " ").map { $0.lowercased().filter { $0.isLetter || $0.isNumber } }
     }
 }

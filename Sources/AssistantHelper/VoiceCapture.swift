@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 import Speech
 import AssistantCore
 
@@ -37,13 +38,12 @@ final class VoiceCapture {
             locale: Locale.current.identifier)
         guard readiness == .ready, let recognizer else { return readiness }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.requiresOnDeviceRecognition = true
-        request.shouldReportPartialResults = true
+        let request = Self.newRequest()
+        let feed = AudioFeed(request)
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0 else { return .unavailable(.noMicrophone) }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.feeding(request))
+        input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.feeding(feed))
         engine.prepare()
         do {
             try engine.start()
@@ -51,11 +51,18 @@ final class VoiceCapture {
             input.removeTap(onBus: 0)
             return .unavailable(.noMicrophone)
         }
-        let recording = Recording(recognizer: recognizer, request: request)
+        let recording = Recording(recognizer: recognizer, request: request, feed: feed)
         recording.capture = self
         live = recording
-        recording.task = recognizer.recognitionTask(with: request, resultHandler: Self.delivering(to: recording))
+        recording.startTask()
         return .ready
+    }
+
+    fileprivate static func newRequest() -> SFSpeechAudioBufferRecognitionRequest {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.requiresOnDeviceRecognition = true
+        request.shouldReportPartialResults = true
+        return request
     }
 
     /// Shows macOS's prompts for the permissions `begin()` found undecided, microphone then speech
@@ -121,19 +128,41 @@ final class VoiceCapture {
     fileprivate final class Recording {
         private var recognizer: SFSpeechRecognizer?
         private var request: SFSpeechAudioBufferRecognitionRequest?
+        /// Where the microphone tap sends audio; swapped to the new request on a restart.
+        private let feed: AudioFeed
+        /// Bumped on each restart, so a late result from an earlier task is ignored.
+        private var generation = 0
         var task: SFSpeechRecognitionTask?
         var state = VoiceTranscript()
         var completion: ((String) -> Void)?
         weak var capture: VoiceCapture?
         private var timeout: Timer?
 
-        init(recognizer: SFSpeechRecognizer, request: SFSpeechAudioBufferRecognitionRequest) {
+        init(recognizer: SFSpeechRecognizer, request: SFSpeechAudioBufferRecognitionRequest, feed: AudioFeed) {
             self.recognizer = recognizer
             self.request = request
+            self.feed = feed
         }
 
-        func received(_ text: String?, isFinal: Bool) {
-            apply(state.received(text, isFinal: isFinal))
+        func startTask() {
+            guard let recognizer, let request else { return }
+            task = recognizer.recognitionTask(with: request, resultHandler: VoiceCapture.delivering(to: self, generation: generation))
+        }
+
+        func received(_ text: String?, isFinal: Bool, endsUtterance: Bool, generation: Int) {
+            guard generation == self.generation else { return }
+            apply(state.received(text, isFinal: isFinal, endsUtterance: endsUtterance))
+        }
+
+        /// Recognition ended mid-hold: a new request and task on the same microphone.
+        private func restart() {
+            guard request != nil else { return }
+            task?.cancel()
+            let request = VoiceCapture.newRequest()
+            self.request = request
+            feed.request = request
+            generation += 1
+            startTask()
         }
 
         func apply(_ effects: [VoiceTranscript.Effect]) {
@@ -141,6 +170,8 @@ final class VoiceCapture {
                 switch effect {
                 case .showPartial(let text):
                     if capture?.live === self { capture?.onPartial(text) }
+                case .restartRecognition:
+                    restart()
                 case .stopAudio:
                     capture?.stopAudio(for: self)
                     request?.endAudio()
@@ -178,17 +209,20 @@ final class VoiceCapture {
     // Built outside the main actor: the tap runs on the audio thread and results arrive on a
     // background queue, so neither closure may inherit main-actor isolation.
 
-    private nonisolated static func feeding(_ request: SFSpeechAudioBufferRecognitionRequest) -> AVAudioNodeTapBlock {
-        nonisolated(unsafe) let request = request
-        return { buffer, _ in request.append(buffer) }
+    private nonisolated static func feeding(_ feed: AudioFeed) -> AVAudioNodeTapBlock {
+        { buffer, _ in feed.request.append(buffer) }
     }
 
-    private nonisolated static func delivering(to recording: Recording) -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
+    fileprivate nonisolated static func delivering(to recording: Recording, generation: Int)
+        -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
         { [weak recording] result, error in
             let text = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? (error != nil)
+            let endsUtterance = result?.speechRecognitionMetadata != nil
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { recording?.received(text, isFinal: isFinal) }
+                MainActor.assumeIsolated {
+                    recording?.received(text, isFinal: isFinal, endsUtterance: endsUtterance, generation: generation)
+                }
             }
         }
     }
@@ -214,6 +248,25 @@ final class VoiceCapture {
         case .notDetermined: .notDetermined
         case .restricted: .restricted
         default: .denied
+        }
+    }
+}
+
+/// The request the microphone tap appends to. The tap runs on the audio thread while a restart
+/// swaps the request on the main thread, so it sits behind a lock.
+private final class AudioFeed: Sendable {
+    private let current: OSAllocatedUnfairLock<SFSpeechAudioBufferRecognitionRequest>
+
+    init(_ request: SFSpeechAudioBufferRecognitionRequest) {
+        nonisolated(unsafe) let request = request
+        current = OSAllocatedUnfairLock(uncheckedState: request)
+    }
+
+    var request: SFSpeechAudioBufferRecognitionRequest {
+        get { current.withLockUnchecked { $0 } }
+        set {
+            nonisolated(unsafe) let newValue = newValue
+            current.withLockUnchecked { $0 = newValue }
         }
     }
 }
