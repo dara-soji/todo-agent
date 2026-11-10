@@ -10,6 +10,8 @@ final class FakeSplitter: TranscriptSplitter {
     var titles: (String) -> [String] = { [$0] }
     /// The Project label answered, if any.
     var project: String?
+    /// Answers that everything said was taken back.
+    var retracted = false
     var fails = false
     var refuses = false
     /// Never answers, as a call that hangs would.
@@ -28,7 +30,7 @@ final class FakeSplitter: TranscriptSplitter {
         if fails { throw URLError(.notConnectedToInternet) }
         if refuses { throw Refused(call: Self.call) }
         if hangs { try await _Concurrency.Task.sleep(for: .seconds(60)) }
-        return SplitAnswer(titles: titles(request.transcript), project: project, call: Self.call)
+        return SplitAnswer(titles: titles(request.transcript), project: project, retracted: retracted, call: Self.call)
     }
 }
 
@@ -203,7 +205,7 @@ final class FakeSplitter: TranscriptSplitter {
         assistant.receive(.activeWindow(app: App(bundleID: "com.apple.finder", name: "Finder"), windowTitle: "Downloads"))
         splitter.fails = true
         let tasks = try await runner(assistant).add("for the Acme deck, email Sam", otherwise: todo.id).tasks
-        try expectVerbatim(tasks, assistant, transcript: "for the Acme deck, email Sam")
+        try expectFallback(tasks, assistant, transcript: "for the Acme deck, email Sam")
         #expect(tasks.map(\.project) == [todo.id])
     }
 
@@ -215,10 +217,10 @@ final class FakeSplitter: TranscriptSplitter {
         #expect(tasks.map(\.project) == [nil])
     }
 
-    // MARK: Fallback: one verbatim Task, as in #40
+    // MARK: Fallback: one Task from the transcript, as in #40
 
     /// The fallback Task: the transcript with standalone filler and repeated words taken out.
-    func expectVerbatim(_ tasks: [AssistantCore.Task], _ assistant: Assistant, transcript: String, title: String? = nil) throws {
+    func expectFallback(_ tasks: [AssistantCore.Task], _ assistant: Assistant, transcript: String, title: String? = nil) throws {
         let title = title ?? transcript
         #expect(tasks.map(\.title) == [title])
         #expect(assistant.tasks.map(\.title) == [title])
@@ -229,7 +231,7 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.fails = true
         let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
+        try expectFallback(tasks, assistant, transcript: "um email Sam", title: "email Sam")
         #expect(try store.load().audit.isEmpty)
     }
 
@@ -237,7 +239,7 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.refuses = true
         let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
+        try expectFallback(tasks, assistant, transcript: "um email Sam", title: "email Sam")
         #expect(try store.load().audit == [FakeSplitter.call])
     }
 
@@ -245,14 +247,14 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.titles = { _ in [" ", ""] }
         let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
+        try expectFallback(tasks, assistant, transcript: "um email Sam", title: "email Sam")
     }
 
     @Test func tooManyTitlesIsMalformedAndFallsBack() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in (1...(VoiceSplit.taskLimit + 1)).map { "Task \($0)" } }
         let tasks = try await runner(assistant).add("a long ramble", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "a long ramble")
+        try expectFallback(tasks, assistant, transcript: "a long ramble")
     }
 
     @Test func undoTargetsTheEntryTheVoiceAddWroteNotTheLatestOne() async throws {
@@ -283,7 +285,7 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.hangs = true
         let tasks = try await runner(assistant, timeout: .milliseconds(50)).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
+        try expectFallback(tasks, assistant, transcript: "um email Sam", title: "email Sam")
     }
 
     @Test func silenceAddsNothingAndSendsNothing() async {
@@ -293,17 +295,30 @@ final class FakeSplitter: TranscriptSplitter {
         #expect(assistant.operationLog.isEmpty)
     }
 
-    // MARK: Corrections said out loud
+    // MARK: Retracting everything said
 
     @Test func retractingEveryTaskAddsNothingButIsMetered() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in [] }
+        splitter.retracted = true
         await #expect(throws: Assistant.Failure.emptyTitle) {
             try await runner(assistant).add("buy milk, actually scratch that", otherwise: nil)
         }
         #expect(assistant.tasks.isEmpty)
         #expect(assistant.operationLog.isEmpty)
         #expect(try store.load().audit == [FakeSplitter.call])
+    }
+
+    @Test func anEmptyAnswerThatIsNoRetractionFallsBack() async throws {
+        let assistant = makeAssistant()
+        splitter.titles = { _ in [] }
+        let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
+        try expectFallback(tasks, assistant, transcript: "um email Sam", title: "email Sam")
+    }
+
+    @Test func aRetractionWithTitlesStillAddsThem() {
+        let answer = SplitAnswer(titles: ["Book flights"], retracted: true, call: nil)
+        #expect(VoiceSplit.read(answer, in: []) == .tasks([SpokenTask(title: "Book flights")]))
     }
 
     // MARK: Filler left out of the fallback

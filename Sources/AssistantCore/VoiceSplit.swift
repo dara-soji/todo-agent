@@ -13,17 +13,20 @@ public struct SplitRequest: Equatable, Sendable {
     }
 }
 
-/// Haiku's answer: one or more Task titles, filler removed, in the order they were said, and the
+/// Haiku's answer: one or more Task titles, cleaned up, in the order they were said, and the
 /// Project named out loud, if one was ("for the Acme deck, …").
 public struct SplitAnswer: Sendable {
     public let titles: [String]
     /// One of the request's `projects`, or nil when none was named.
     public let project: String?
+    /// Dara took back everything said ("buy milk… scratch that"), so `titles` is empty on purpose.
+    public let retracted: Bool
     public let call: APICall?
 
-    public init(titles: [String], project: String? = nil, call: APICall?) {
+    public init(titles: [String], project: String? = nil, retracted: Bool = false, call: APICall?) {
         self.titles = titles
         self.project = project
+        self.retracted = retracted
         self.call = call
     }
 }
@@ -64,10 +67,28 @@ public protocol TranscriptSplitter: AnyObject, Sendable {
 }
 
 /// The rule for reading a split: trimmed titles, blanks dropped; nothing usable, or more than
-/// `taskLimit`, is no answer. An answer of no titles at all means Dara retracted everything said.
+/// `taskLimit`, is no answer.
 public enum VoiceSplit {
     /// More Tasks than this from one recording is read as a malformed answer.
     public static let taskLimit = 8
+
+    /// What one split answer means.
+    public enum Reading: Equatable, Sendable {
+        case tasks([SpokenTask])
+        /// Everything said was taken back: nothing is added.
+        case retracted
+        /// Unusable: the transcript is added as one Task instead.
+        case noAnswer
+    }
+
+    /// Reads an answer: an empty one is a retraction only when Haiku says so; any other unusable
+    /// answer is no answer, so a recording is never dropped by mistake.
+    public static func read(_ answer: SplitAnswer, in projects: [Project]) -> Reading {
+        if answer.retracted, answer.titles.allSatisfy({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
+            return .retracted
+        }
+        return tasks(from: answer.titles, project: project(named: answer.project, in: projects)).map(Reading.tasks) ?? .noAnswer
+    }
 
     public static func tasks(from titles: [String], project: Project.ID? = nil) -> [SpokenTask]? {
         let tasks = titles.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -90,10 +111,10 @@ public enum VoiceSplit {
         return matches.count == 1 ? matches[0].id : nil
     }
 
-    /// Sounds that are never words, dropped from a transcript Haiku didn't clean.
-    static let filler: Set<String> = ["um", "umm", "uh", "uhh", "uhm", "er", "erm", "hmm", "hm", "mm", "mmm", "ah"]
+    /// Sounds that are never words (and their common spellings), dropped from a transcript Haiku didn't clean.
+    private static let filler: Set<String> = ["um", "umm", "uh", "uhh", "er", "erm", "hmm", "hm", "mm", "mmm"]
 
-    /// The verbatim fallback's cleanup: standalone filler sounds and immediately repeated words
+    /// The fallback Task's cleanup: standalone filler sounds and immediately repeated words
     /// ("the the") taken out, nothing else touched. Only for voice; typed text is never filtered.
     public static func withoutFiller(_ transcript: String) -> String {
         var kept: [String] = []
@@ -118,7 +139,7 @@ public enum VoiceSplit {
 /// malformed) it adds the transcript as one Task, with standalone filler taken out.
 @MainActor
 public final class VoiceSplitRunner {
-    /// Longest wait for the split before the verbatim Task is added instead.
+    /// Longest wait for the split before the fallback Task is added instead.
     public static let timeout: Duration = .seconds(6)
 
     private let assistant: Assistant
@@ -150,19 +171,14 @@ public final class VoiceSplitRunner {
             // "…scratch that": every Task said was taken back, so nothing is added.
             throw Assistant.Failure.emptyTitle
         case .noAnswer:
+            // All filler, once filtered: nothing was really said.
             let title = VoiceSplit.withoutFiller(transcript)
             guard !Self.heardNothing(title) else { throw Assistant.Failure.emptyTitle }
             return try assistant.addSpoken(transcript, as: [], titled: title, otherwise: project)
         }
     }
 
-    private enum Split {
-        case tasks([SpokenTask])
-        case retracted
-        case noAnswer
-    }
-
-    private func split(_ transcript: String) async -> Split {
+    private func split(_ transcript: String) async -> VoiceSplit.Reading {
         let projects = assistant.activeProjects
         let request = SplitRequest(transcript: transcript, projects: VoiceSplit.labels(for: projects))
         let splitter = self.splitter
@@ -180,9 +196,7 @@ public final class VoiceSplitRunner {
             // Timed out: a call cancelled mid-flight has no usage to meter.
             guard let answer else { return .noAnswer }
             if let call = answer.call { assistant.recordAPICall(call) }
-            if answer.titles.isEmpty { return .retracted }
-            let tasks = VoiceSplit.tasks(from: answer.titles, project: VoiceSplit.project(named: answer.project, in: projects))
-            return tasks.map(Split.tasks) ?? .noAnswer
+            return VoiceSplit.read(answer, in: projects)
         } catch {
             if let billed = error as? BilledFailure { assistant.recordAPICall(billed.call) }
             return .noAnswer

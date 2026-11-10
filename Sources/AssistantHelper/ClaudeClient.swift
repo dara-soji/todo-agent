@@ -173,13 +173,13 @@ final class ClaudeClient: ModelClient, TieBreaker, EmailTriager, TranscriptSplit
 
     /// Turns one voice quick-add transcript into Task titles, cleaned the way dictation is: filler
     /// removed, spoken self-corrections applied, capitalized and punctuated. Haiku 5.5 at medium
-    /// effort, so corrections across Tasks are read reliably within the timeout. Only the transcript
+    /// effort, so self-corrections across Tasks are read reliably within the timeout. Only the transcript
     /// and the active Project names are sent; the transcript is untrusted, so it is passed as data.
     func split(_ request: SplitRequest) async throws -> SplitAnswer {
         guard let key = apiKey() else { throw Failure.http(401, "no_api_key") }
         let body: [String: Any] = [
             "model": Self.voiceSplitModel,
-            "max_tokens": 1024,
+            "max_tokens": 2048,
             "output_config": [
                 "effort": "medium",
                 "format": [
@@ -189,6 +189,7 @@ final class ClaudeClient: ModelClient, TieBreaker, EmailTriager, TranscriptSplit
                         "properties": [
                             "tasks": ["type": "array", "items": ["type": "string"]],
                             "project": ["type": "string"],
+                            "retracted": ["type": "boolean"],
                         ],
                         "required": ["tasks"],
                         "additionalProperties": false,
@@ -205,10 +206,10 @@ final class ClaudeClient: ModelClient, TieBreaker, EmailTriager, TranscriptSplit
                 - Remove filler, false starts, stutters and lead-ins ("um", "uh", "like", "you know", "so", \
                 "I need to", "I should", "remind me to", "and also").
                 - Apply the speaker's own corrections, but only where they clearly take back or replace \
-                something ("no", "sorry", "I mean", "wait", "actually make that", "scratch that", "forget \
-                that one"). Keep only the corrected version: "email Sam, no, email Jo" is "Email Jo"; "at 3, \
+                something ("no", "I mean", "actually make that", "scratch that", "forget that one"). Keep only the corrected version: "email Sam, no, email Jo" is "Email Jo"; "at 3, \
                 actually 4" is "at 4". A retraction can drop a whole item ("buy milk… scratch that, forget \
-                the milk" leaves no milk item); if every item is retracted, return no tasks.
+                the milk" leaves no milk item). Only if every item is retracted, return no tasks and set \
+                "retracted" to true; otherwise leave "retracted" out.
                 - When it is unclear whether something is a correction ("call Sam, and actually Jo too", \
                 "email Sam, no rush"), keep the words as said.
                 - Capitalize the first word and proper names, and fix punctuation. Nothing more: do not \
@@ -239,7 +240,8 @@ final class ClaudeClient: ModelClient, TieBreaker, EmailTriager, TranscriptSplit
         let call = Self.call(json, purpose: .voiceSplit, model: Self.voiceSplitModel, kind: .transcript)
         let answer = try Self.answer(json, call: call)
         guard let titles = answer["tasks"] as? [String] else { throw NoAnswer(reason: "unreadable", call: call) }
-        return SplitAnswer(titles: titles, project: answer["project"] as? String, call: call)
+        return SplitAnswer(
+            titles: titles, project: answer["project"] as? String, retracted: answer["retracted"] as? Bool ?? false, call: call)
     }
 
     /// "2026-10-16T09:30", or "2026-10-16" read as 17:00 that day, in Dara's time zone.
