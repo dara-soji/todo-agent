@@ -217,9 +217,11 @@ final class FakeSplitter: TranscriptSplitter {
 
     // MARK: Fallback: one verbatim Task, as in #40
 
-    func expectVerbatim(_ tasks: [AssistantCore.Task], _ assistant: Assistant, transcript: String) throws {
-        #expect(tasks.map(\.title) == [transcript])
-        #expect(assistant.tasks.map(\.title) == [transcript])
+    /// The fallback Task: the transcript with standalone filler and repeated words taken out.
+    func expectVerbatim(_ tasks: [AssistantCore.Task], _ assistant: Assistant, transcript: String, title: String? = nil) throws {
+        let title = title ?? transcript
+        #expect(tasks.map(\.title) == [title])
+        #expect(assistant.tasks.map(\.title) == [title])
         #expect(assistant.operationLog.last?.summary == "Added by voice “\(transcript)”")
     }
 
@@ -227,7 +229,7 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.fails = true
         let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam")
+        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
         #expect(try store.load().audit.isEmpty)
     }
 
@@ -235,15 +237,15 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.refuses = true
         let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam")
+        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
         #expect(try store.load().audit == [FakeSplitter.call])
     }
 
-    @Test func anEmptyListFallsBack() async throws {
+    @Test func onlyBlankTitlesFallBack() async throws {
         let assistant = makeAssistant()
         splitter.titles = { _ in [" ", ""] }
         let tasks = try await runner(assistant).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam")
+        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
     }
 
     @Test func tooManyTitlesIsMalformedAndFallsBack() async throws {
@@ -281,7 +283,7 @@ final class FakeSplitter: TranscriptSplitter {
         let assistant = makeAssistant()
         splitter.hangs = true
         let tasks = try await runner(assistant, timeout: .milliseconds(50)).add("um email Sam", otherwise: nil).tasks
-        try expectVerbatim(tasks, assistant, transcript: "um email Sam")
+        try expectVerbatim(tasks, assistant, transcript: "um email Sam", title: "email Sam")
     }
 
     @Test func silenceAddsNothingAndSendsNothing() async {
@@ -289,6 +291,43 @@ final class FakeSplitter: TranscriptSplitter {
         await #expect(throws: Assistant.Failure.emptyTitle) { try await runner(assistant).add(" \n ", otherwise: nil) }
         #expect(splitter.seen.isEmpty)
         #expect(assistant.operationLog.isEmpty)
+    }
+
+    // MARK: Corrections said out loud
+
+    @Test func retractingEveryTaskAddsNothingButIsMetered() async throws {
+        let assistant = makeAssistant()
+        splitter.titles = { _ in [] }
+        await #expect(throws: Assistant.Failure.emptyTitle) {
+            try await runner(assistant).add("buy milk, actually scratch that", otherwise: nil)
+        }
+        #expect(assistant.tasks.isEmpty)
+        #expect(assistant.operationLog.isEmpty)
+        #expect(try store.load().audit == [FakeSplitter.call])
+    }
+
+    // MARK: Filler left out of the fallback
+
+    @Test func theFallbackDropsStandaloneFillerAndRepeats() {
+        #expect(VoiceSplit.withoutFiller("Um, email Sam uh about the the deck") == "email Sam about the deck")
+        #expect(VoiceSplit.withoutFiller("UMM call er Jo. Hmm") == "call Jo.")
+        #expect(VoiceSplit.withoutFiller("book the dentist") == "book the dentist")
+        // Words that merely contain filler stay.
+        #expect(VoiceSplit.withoutFiller("summer umbrella hummus") == "summer umbrella hummus")
+        #expect(VoiceSplit.withoutFiller("um uh") == "")
+    }
+
+    @Test func aFallbackOfOnlyFillerAddsNothing() async {
+        let assistant = makeAssistant()
+        splitter.fails = true
+        await #expect(throws: Assistant.Failure.emptyTitle) { try await runner(assistant).add("um uh", otherwise: nil) }
+        #expect(assistant.operationLog.isEmpty)
+    }
+
+    @Test func typedTasksAreNeverFiltered() throws {
+        let assistant = makeAssistant()
+        let task = try assistant.quickAdd("um the the plan")
+        #expect(task.title == "um the the plan")
     }
 
     // MARK: The fallback rule

@@ -64,7 +64,7 @@ public protocol TranscriptSplitter: AnyObject, Sendable {
 }
 
 /// The rule for reading a split: trimmed titles, blanks dropped; nothing usable, or more than
-/// `taskLimit`, is no answer.
+/// `taskLimit`, is no answer. An answer of no titles at all means Dara retracted everything said.
 public enum VoiceSplit {
     /// More Tasks than this from one recording is read as a malformed answer.
     public static let taskLimit = 8
@@ -90,6 +90,24 @@ public enum VoiceSplit {
         return matches.count == 1 ? matches[0].id : nil
     }
 
+    /// Sounds that are never words, dropped from a transcript Haiku didn't clean.
+    static let filler: Set<String> = ["um", "umm", "uh", "uhh", "uhm", "er", "erm", "hmm", "hm", "mm", "mmm", "ah"]
+
+    /// The verbatim fallback's cleanup: standalone filler sounds and immediately repeated words
+    /// ("the the") taken out, nothing else touched. Only for voice; typed text is never filtered.
+    public static func withoutFiller(_ transcript: String) -> String {
+        var kept: [String] = []
+        var previous: String?
+        for word in transcript.split(whereSeparator: \.isWhitespace).map(String.init) {
+            let bare = word.trimmingCharacters(in: .punctuationCharacters).lowercased()
+            if filler.contains(bare) { continue }
+            if !bare.isEmpty, bare == previous { continue }
+            kept.append(word)
+            previous = bare
+        }
+        return kept.joined(separator: " ")
+    }
+
     private static func key(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
@@ -97,7 +115,7 @@ public enum VoiceSplit {
 
 /// Voice quick-add after release: asks the model to split the transcript, records the call, and adds
 /// the Tasks as one Operation. With no answer in time (no API key, offline, a refusal, anything
-/// malformed) it adds the transcript verbatim as one Task.
+/// malformed) it adds the transcript as one Task, with standalone filler taken out.
 @MainActor
 public final class VoiceSplitRunner {
     /// Longest wait for the split before the verbatim Task is added instead.
@@ -125,11 +143,26 @@ public final class VoiceSplitRunner {
     public func add(_ transcript: String, otherwise project: Project.ID?) async throws -> SpokenAdd {
         guard !Self.heardNothing(transcript) else { throw Assistant.Failure.emptyTitle }
         let transcript = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        let split = await self.split(transcript)
-        return try assistant.addSpoken(transcript, as: split ?? [], otherwise: project)
+        switch await self.split(transcript) {
+        case .tasks(let tasks):
+            return try assistant.addSpoken(transcript, as: tasks, otherwise: project)
+        case .retracted:
+            // "…scratch that": every Task said was taken back, so nothing is added.
+            throw Assistant.Failure.emptyTitle
+        case .noAnswer:
+            let title = VoiceSplit.withoutFiller(transcript)
+            guard !Self.heardNothing(title) else { throw Assistant.Failure.emptyTitle }
+            return try assistant.addSpoken(transcript, as: [], titled: title, otherwise: project)
+        }
     }
 
-    private func split(_ transcript: String) async -> [SpokenTask]? {
+    private enum Split {
+        case tasks([SpokenTask])
+        case retracted
+        case noAnswer
+    }
+
+    private func split(_ transcript: String) async -> Split {
         let projects = assistant.activeProjects
         let request = SplitRequest(transcript: transcript, projects: VoiceSplit.labels(for: projects))
         let splitter = self.splitter
@@ -145,12 +178,14 @@ public final class VoiceSplitRunner {
                 return try await group.next() ?? nil
             }
             // Timed out: a call cancelled mid-flight has no usage to meter.
-            guard let answer else { return nil }
+            guard let answer else { return .noAnswer }
             if let call = answer.call { assistant.recordAPICall(call) }
-            return VoiceSplit.tasks(from: answer.titles, project: VoiceSplit.project(named: answer.project, in: projects))
+            if answer.titles.isEmpty { return .retracted }
+            let tasks = VoiceSplit.tasks(from: answer.titles, project: VoiceSplit.project(named: answer.project, in: projects))
+            return tasks.map(Split.tasks) ?? .noAnswer
         } catch {
             if let billed = error as? BilledFailure { assistant.recordAPICall(billed.call) }
-            return nil
+            return .noAnswer
         }
     }
 }

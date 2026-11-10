@@ -38,12 +38,14 @@ extension Assistant {
 
     /// Voice quick-add: the Tasks heard in one recording, added as **one** Operation, so one Undo
     /// removes them all. Each goes to the Project named for it, or else to `fallback` (the Project
-    /// the palette showed when recording started). With no `tasks` (no split), the transcript as
-    /// heard is the one Task. The Operation log keeps the transcript.
+    /// the palette showed when recording started). With no `tasks` (no split), the one Task is titled
+    /// `title`, or else the transcript as heard. The Operation log keeps the transcript.
     @discardableResult
-    public func addSpoken(_ transcript: String, as tasks: [SpokenTask] = [], otherwise fallback: Project.ID?) throws -> SpokenAdd {
+    public func addSpoken(
+        _ transcript: String, as tasks: [SpokenTask] = [], titled title: String? = nil, otherwise fallback: Project.ID?
+    ) throws -> SpokenAdd {
         let transcript = try Self.nonEmpty(transcript, else: .emptyTitle)
-        let drafts = tasks.isEmpty ? [SpokenTask(title: transcript)] : tasks
+        let drafts = tasks.isEmpty ? [SpokenTask(title: title ?? transcript)] : tasks
         let added = try drafts.map { spoken in
             // A Project archived since recording started is no destination.
             let project = (spoken.project ?? fallback).flatMap { self.project($0)?.status == .active ? $0 : nil }
