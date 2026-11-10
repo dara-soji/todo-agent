@@ -167,21 +167,75 @@ import AssistantCore
         #expect(transcript.received("Email Sam", isFinal: true) == [.deliver("Email Sam")])
     }
 
-    @Test func finalisingMidHoldStopsTheMicAndKeepsTheWordsForRelease() {
+    @Test func aPauseThatRestartsTheUtteranceKeepsTheWordsBeforeIt() {
         var transcript = VoiceTranscript()
-        _ = transcript.received("email Sam", isFinal: false)
+        _ = transcript.received("buy", isFinal: false)
+        _ = transcript.received("buy milk", isFinal: false)
 
-        #expect(transcript.received("Email Sam", isFinal: true) == [.showPartial("Email Sam"), .stopAudio])
-        #expect(transcript.received("late", isFinal: false) == [])
-        #expect(transcript.finish() == .deliver("Email Sam"))
+        // After a pause the on-device recognizer reports only the words since the pause.
+        #expect(transcript.received("email", isFinal: false) == [.showPartial("buy milk email")])
+        #expect(transcript.received("email Sam", isFinal: false) == [.showPartial("buy milk email Sam")])
+
+        _ = transcript.finish()
+        #expect(transcript.received("Email Sam", isFinal: true) == [.deliver("buy milk Email Sam")])
     }
 
-    @Test func anErrorMidHoldStopsTheMicAndKeepsThePartial() {
+    @Test func revisionsOfTheSameUtteranceReplaceRatherThanAppend() {
+        var transcript = VoiceTranscript()
+        _ = transcript.received("email some", isFinal: false)
+
+        #expect(transcript.received("email Sam", isFinal: false) == [.showPartial("email Sam")])
+        #expect(transcript.received("Email", isFinal: false) == [.showPartial("Email")])
+        #expect(transcript.text == "Email")
+    }
+
+    @Test func anUtteranceTheRecognizerMarksEndedIsKeptWhateverComesNext() {
+        var transcript = VoiceTranscript()
+        _ = transcript.received("buy", isFinal: false)
+        #expect(transcript.received("buy milk", isFinal: false, endsUtterance: true) == [.showPartial("buy milk")])
+
+        // The next utterance's first word can't be told from a revision by text alone; the mark decides.
+        #expect(transcript.received("book", isFinal: false) == [.showPartial("buy milk book")])
+    }
+
+    @Test func aCumulativeResultAfterAPauseIsNotDoubled() {
+        var transcript = VoiceTranscript()
+        _ = transcript.received("buy milk", isFinal: false)
+        _ = transcript.received("email", isFinal: false)
+
+        // If the recognizer goes back to reporting everything, the earlier words aren't repeated.
+        #expect(transcript.received("buy milk email Sam", isFinal: false) == [.showPartial("buy milk email Sam")])
+    }
+
+    @Test func finalisingMidHoldRestartsRecognitionAndKeepsListening() {
+        var transcript = VoiceTranscript()
+        _ = transcript.received("buy milk", isFinal: false)
+
+        #expect(transcript.received("Buy milk", isFinal: true) == [.showPartial("Buy milk"), .restartRecognition])
+        #expect(transcript.received("email Sam", isFinal: false) == [.showPartial("Buy milk email Sam")])
+        _ = transcript.finish()
+        #expect(transcript.received("email Sam", isFinal: true) == [.deliver("Buy milk email Sam")])
+    }
+
+    @Test func anErrorMidHoldRestartsAndKeepsThePartial() {
         var transcript = VoiceTranscript()
         _ = transcript.received("email Sam", isFinal: false)
 
         // An error arrives as a final result with no text.
+        #expect(transcript.received(nil, isFinal: true) == [.restartRecognition])
+        #expect(transcript.finish() == .stopAudio)
+        #expect(transcript.timedOut() == .deliver("email Sam"))
+    }
+
+    @Test func recognitionThatKeepsEndingStopsTheMicAfterTheRestartLimit() {
+        var transcript = VoiceTranscript()
+        _ = transcript.received("email Sam", isFinal: false)
+        for _ in 0..<VoiceTranscript.restartLimit {
+            #expect(transcript.received(nil, isFinal: true) == [.restartRecognition])
+        }
+
         #expect(transcript.received(nil, isFinal: true) == [.stopAudio])
+        #expect(transcript.received("late", isFinal: false) == [])
         #expect(transcript.finish() == .deliver("email Sam"))
     }
 
